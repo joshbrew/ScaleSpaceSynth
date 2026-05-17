@@ -2,7 +2,7 @@
 
 A WebGPU phase-space visualizer / higher-dimensional oscilloscope. Part of the [Scale Space](https://reddit.com/r/ScaleSpace) project.
 
-![status](https://img.shields.io/badge/status-alpha-orange) ![license](https://img.shields.io/badge/license-MIT-blue)
+![status](https://img.shields.io/badge/status-stable-green) ![license](https://img.shields.io/badge/license-MIT-blue)
 
 ## Just run it
 
