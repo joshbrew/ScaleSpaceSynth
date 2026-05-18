@@ -46,10 +46,10 @@ Original ask: editable by a designer, not just a developer. One file = no jumpin
 | Keys | Action |
 |---|---|
 | Tab | Hide/show UI |
-| Home | Reset camera |
-| Pause / P | Toggle simulation pause / toggle audio |
+| Home | Return to Homepoint |
 | PgUp / PgDn | Adjust tempo |
 | Ctrl+S | Capture current configuration as a waypoint |
+| Arrow keys | Orbital Rotation |
 | Q / E | Free energy (particle count) |
 | Z / X | Resolution (particle size) |
 | R / T | Equilibrium (noise speed) |
@@ -58,7 +58,9 @@ Original ask: editable by a designer, not just a developer. One file = no jumpin
 | I / O | Inversion (compression) |
 | N / M | Scale depth (attraction force) |
 | K / L | Half-life (particle lifespan) |
-| Right-click canvas | Open radial menu |
+| Left-click canvas | Open Parameters radial menu |
+| Right-click canvas | Open Visuals radial menu |
+| Middle-click canvas | Open Config radial menu |
 
 # Screenshots
 
