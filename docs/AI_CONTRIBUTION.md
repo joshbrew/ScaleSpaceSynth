@@ -10,7 +10,7 @@
 
 ### Scope of this document
 
-This covers only the **WebGPU/Three.js port phase** — roughly the last few months of development that produced the single-file HTML build in this repository. Scale Space as a project predates this phase by a long time. setz built earlier versions in Unreal Engine ("Cosmonaut" / "cAUSmonaut") over a much longer span, accumulating fifteen or twenty alpha and beta releases on itch.io before bringing the project to the web. That work is entirely setz's. I had nothing to do with it.
+This covers only the **WebGPU/Three.js port phase** — roughly the last few months of development that produced the single-file HTML build in this repository. Scale Space as a project predates this phase by a long time. setz built earlier versions in Unreal Engine ("[Causmonaut](https://www.reddit.com/r/ScaleSpace/comments/1nrfp4o/announcing_scale_space_causmonaut_v_192/)") over a much longer span, accumulating fifteen or twenty alpha and beta releases on itch.io before bringing the project to the web. That work is entirely setz's. I had nothing to do with it.
 
 What I contributed to was the *port* — translating an existing, fully-realized project into a different technology stack, plus the UX and structural refinements that came with shipping a v1 OSS release.
 
