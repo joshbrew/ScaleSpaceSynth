@@ -23,7 +23,7 @@ Open `dist/index.html` in a WebGPU-capable browser (Chrome / Edge / Brave / Safa
 
 **Mac:** same idea, use the `.command` files instead.
 
-Full plain-English instructions are in `START-HERE.txt`.
+Full plain-English instructions are in [`START-HERE.txt`](https://github.com/setzstone/ScaleSpaceSynth/blob/main/START-HERE.txt).
 
 ## Edit it (command line)
 
