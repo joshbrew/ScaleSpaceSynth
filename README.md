@@ -70,6 +70,8 @@ Original ask: editable by a designer, not just a developer. One file = no jumpin
 | Right-click canvas | Open Visuals radial menu |
 | Middle-click canvas | Open Config radial menu |
 
+*More controls information available in the 'Controls' panel in the application.*
+
 # Screenshots
 
 All screenshots are unedited. Differences in scanlines and backgrounds come from settings in Scale Space Synthesist.
