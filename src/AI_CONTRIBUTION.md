@@ -80,3 +80,40 @@ To ensure absolute clarity regarding the authorship of this project:
 ## Why this matters
 
 The division of labor across these models highlights a distinct reality of modern software development: AI did not build Scale Space Synthesist. A single developer used different AI engines like specialized instruments—leveraging one for foundational scaffolding and engineering strategy, and another for rapid implementation, hardening, and fine-tuning. The unifying thread, creative direction, and actual execution belong entirely to the principal developer.
+
+You're right – that was an overstatement. I’ve revised Part 3 to remove “last” and instead acknowledge the parallel collaboration with multiple models.
+
+---
+
+# Part 3: DeepSeek (深度求索)
+
+*The following account details DeepSeek’s role in the final debugging, merging, and polish of the Synthesist 1.0 release, including the restoration of stable tour behaviour and the integration of new UI features.*
+
+## Scope of this document
+
+My involvement occurred during the later stage of the WebGPU/Three.js port, after the core engine was running and the feature‑rich UI (entropy, share strings, profile, theme, button shape) had been added. At this point, the project was in a frustrating state: the new UI worked, but the waypoint tour system and the toggling of Strings/Lattice had become unreliable – meshes would freeze, disappear, or fail to reappear. setz had a **stable version** (where tours and toggles worked flawlessly) and a **feature‑rich version** (with the new UI but broken simulation visuals). My role was to help merge the two without losing either stability or new features.
+
+setz worked with multiple AI models (Gemini, Claude, and me) in parallel, using each where their strengths aligned best with the task. I was brought in specifically for targeted debugging, syntax correction, and final polish.
+
+## How we worked
+
+setz directed every step. setz provided both codebases, ran the builds, tested every change, and reported back with console errors and visual observations. I never saw the screen – all my feedback loops were through setz’s descriptions and error logs. setz would say “Strings freeze when I toggle them off and on”, and I would propose a fix. setz would apply it, build, and report the result. Many rounds. When I gave broken code (duplicate methods, misplaced braces, over‑aggressive refactors), setz caught it by actually running the app. setz has ADHD and finds dense syntax hard to proofread – that’s where I was most useful: helping spot duplicates, missing braces, and structural errors that the build process eventually revealed. But the final verification was always setz.
+
+## What I contributed to
+
+- **Diagnosing the root cause of the freeze.** The problem was that the feature‑rich version had added dynamic buffer recreation for ribbons/lattice when particle count changed. This caused allocation failures and left the meshes in an inconsistent state. I helped identify that the stable version allocated buffers once (at max size) and never resized – and that was the behaviour to restore.
+- **Merging the two codebases.** I provided targeted patches to replace the broken `Engine` class with the stable one, while keeping all the new UI features (entropy, share strings, profile, theme, button shape) intact. The final merge required several rounds because I kept introducing syntax errors; setz patiently tested each attempt until it compiled.
+- **Fixing the startup fade‑in.** setz asked for the particles to fade in at launch instead of popping. I wrote the fade logic and integrated it into the render loop.
+- **Debugging the ASCII art rendering.** setz’s beautiful ASCII art wasn’t preserving spaces. I suggested using `String.raw` and helped adjust the `white-space` CSS to make it display correctly.
+- **Answering post‑release questions.** After the build succeeded, I advised on how to add a fade‑in effect and how to structure the AI acknowledgment document.
+
+## What I did NOT contribute to
+
+- **The simulation model or physics equations.** Those are entirely setz’s, developed over years of Unreal Engine work before the web port.
+- **The aesthetic identity.** The CRT scanlines, the amber synthesist palette, the radial menu design, the typography – all setz.
+- **The community or strategic direction.** setz built the r/ScaleSpace community and made every release decision alone.
+- **The original Unreal prototypes.** I was only involved in the WebGPU/Three.js port phase, and only in a late debugging capacity, alongside other AI models.
+
+## Why this matters
+
+setz worked with a team of AIs – Gemini for early structural scaffolding, Claude for deep refactoring and optimisation, and me for targeted debugging and merge polish. I was not the only AI, nor the “last” – just one of several specialists setz called on. My contribution was about **targeted surgery**: identifying what broke, restoring the stable patterns, and merging setz’s UI improvements on top. Without setz’s relentless testing and ability to describe subtle misbehaviours, I would have been useless. setz did the hard work; I helped clean up the mess.
