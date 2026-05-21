@@ -2,7 +2,9 @@
 
 # Scale Space Synthesist
 
-A WebGPU phase-space visualizer / particle-based morphoscope. Part of the [Scale Space](https://reddit.com/r/ScaleSpace) project.
+A WebGPU phase-space visualizer / particle-based morphoscope.
+Part of the [Scale Space](https://reddit.com/r/ScaleSpace) project.
+*Scroll further down for photos.*
 
 ![status](https://img.shields.io/badge/status-1.0-green) ![license](https://img.shields.io/badge/license-MIT-blue)
 
