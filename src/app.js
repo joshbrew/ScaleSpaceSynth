@@ -51,7 +51,7 @@ const BOOT_ASCII = String.raw`
                                                                            
 `;
 
-// ─── Scale Space Synthesist ───────────────────────────────────────── by setz
+// ─── Scale Space ──────────────────────────────────────────────────── by setz
 //
 // Join the subreddit: https://reddit.com/r/ScaleSpace
 //
@@ -60,7 +60,10 @@ const BOOT_ASCII = String.raw`
 //
 // Picking up the itch version directly funds development of this repo.
 //
-// Sections (in order):
+// If you like this project,
+// I wouldn't turn down a coffee: https://buymeacoffee.com/setzstone
+//
+// ─── Sections (in order): ───────────────────────────────────────────────────
 //
 //   1. APP_TEXT        — all UI labels and copy
 //   2. AudioManager    — Tone.js ambient soundscape (disabled this release)
@@ -92,8 +95,8 @@ export const APP_TEXT = {
         "title": "CORE DECK // SYNTHESIST"
     },
     "panels": {
-        "params": "Parameters",
-        "visuals": "Visuals",
+        "params": "Params",
+        "optics": "Optics",
         "atlas": "Atlas",
         "controls": "Controls",
         "config": "Config",
@@ -112,10 +115,10 @@ export const APP_TEXT = {
         "viscosity": { "label": "Viscosity", "sub": "sluggishness", "ll": "fluid", "lr": "thick" },
         "mass": { "label": "Mass", "sub": "inertia", "ll": "light", "lr": "heavy" },
         "tempo": { "label": "Tempo", "sub": "speed", "ll": "pause", "lr": "2x" },
-        "colorRange": { "label": "Color Range", "sub": "spectrum width", "ll": "tight", "lr": "wide" },
-        "saturation": { "label": "Saturation", "sub": "gray vs color", "ll": "muted", "lr": "vivid" },
+        "colorRange": { "label": "Color Spectrum Range", "sub": "", "ll": "tight", "lr": "wide" },
+        "saturation": { "label": "Color Saturation", "sub": "", "ll": "muted", "lr": "vivid" },
         "variance": { "label": "Variance", "sub": "noise gradient", "ll": "uniform", "lr": "spectral" },
-        "opacity": { "label": "Opacity", "sub": "", "ll": "ghost", "lr": "solid" },
+        "opacity": { "label": "Particle Opacity", "sub": "", "ll": "ghost", "lr": "solid" },
         "trailLength": { "label": "Trail Length", "sub": "", "ll": "short", "lr": "long" },
         "backdropOpacity": { "label": "Backdrop Opacity", "sub": "", "ll": "off", "lr": "bright" },
         "backdropBlur": { "label": "Backdrop Blur", "sub": "", "ll": "crisp", "lr": "soft" },
@@ -124,11 +127,13 @@ export const APP_TEXT = {
     },
     "quanta": {
         "label": "Quanta",
+        "sub": "particle shape",
         "items": ["Circle", "Square", "Diamond"]
     },
-    "strings": {
-        "label": "Strings",
-        "items": ["Curved", "Lattice"]
+    "trails": {
+        "label": "Trails",
+        "sub": "connections between quanta",
+        "items": ["Strings", "Lattice"]
     },
     "colorMode": {
         "label": "Color Mode",
@@ -140,28 +145,45 @@ export const APP_TEXT = {
     },
     "instructions": {
         "global": {
-            "title": "Global Controls",
-            "keys": [
-                "Tab: Hide UI",
-                "Home: Reset Camera",
-                "Ctrl+S: Capture Waypoint",
-                "Pause: Toggle Pause",
-                "PgUp/PgDn: Adjust Tempo"
+            "title": "Global",
+            "rows": [
+                ["Hide UI",         "Tab"],
+                ["Reset Camera",    "Home"],
+                ["Capture Waypoint","Ctrl + S"],
+                ["Freeze / Unfreeze","Pause / Break"],
+                ["Adjust Tempo",    "PgUp / PgDn"]
+            ]
+        },
+        "params": {
+            "title": "Parameters",
+            "rows": [
+                ["Free Energy",   "Q / E"],
+                ["Resolution",    "Z / X"],
+                ["Equilibrium",   "R / T"],
+                ["Temperature",   "G / F"],
+                ["Coherence",     "V / B"],
+                ["Inversion",     "I / O"],
+                ["Scale Depth",   "N / M"],
+                ["Half-Life",     "K / L"]
             ]
         },
         "orbit": {
             "title": "Orbit Mode",
-            "keys": [
-                "Drag to rotate",
-                "Scroll to zoom"
+            "rows": [
+                ["Rotate system",       "Click + drag"],
+                ["Zoom in / out",       "Scroll · W / S"],
+                ["Rotate horizontally", "A / D · ← / →"],
+                ["Rotate vertically",   "↑ / ↓"]
             ]
         },
         "fly": {
             "title": "Fly Mode",
-            "keys": [
-                "W/A/S/D: Move horizontal",
-                "Mouse: Look around",
-                "Space/Shift: Move up/down"
+            "rows": [
+                ["Move forward / back", "W / S"],
+                ["Strafe left / right", "A / D"],
+                ["Look around",         "Mouse · Arrow keys"],
+                ["Move up",             "Space"],
+                ["Move down",           "Shift"]
             ]
         }
     }
@@ -211,26 +233,17 @@ const MODULATABLE_KEYS = [
 const MOD_KEYS = MODULATABLE_KEYS.map(k => k + '_mod');
 
 // Layer-crossfade alpha map. Discrete-toggle keys whose visibility we want
-// to animate as a proper material-opacity fade rather than a hard snap.
-// Earlier comment claimed Strings/Lattice "couldn't produce sensible geometry
-// from a half-faded state" — that turned out to be wrong: the compute kernels
-// are gated on the BOOLEAN flag (only run when on), so they never see a
-// fractional state. The fade lives purely at material.opacity, which is
-// trivially animatable. Adding them back so user toggles fade smoothly.
+// to animate as a material-opacity fade rather than a hard snap. Compute
+// kernels are gated on the boolean (only run when on), so they never see
+// a fractional state — the fade lives purely at material.opacity.
 const VISIBILITY_XFADE_KEYS = {
     showParticles: 'particles',
     showRibbons:   'ribbons',
     tessRibbons:   'lattice'
 };
 
-// Keys whose changes are "the user has taken over the simulation" and should
-// stop an active tour. These are the keys the tour itself interpolates plus
-// the discrete flags it sets at transition end. Anything outside this set —
-// theme, button shape, screenshot toggles, scanline overlays, UI opacity,
-// audio toggles — is cosmetic chrome that has nothing to do with the
-// parameter trajectory the tour is following, so changing them mid-tour
-// should NOT cancel the tour. Without this distinction, toggling theme
-// mid-tour was killing the tour, which felt buggy.
+// Keys whose changes stop an active tour. Cosmetic chrome (theme, UI
+// opacity, scanlines) is excluded — those shouldn't cancel a tour.
 const TOUR_STOPPING_KEYS = new Set([
     ...PARAM_KEYS,
     ...MOD_KEYS,
@@ -279,19 +292,11 @@ function clearVisibilityXfadeForKey(key) {
     }
 }
 
-// Animate a visibility toggle (showParticles / showRibbons / tessRibbons)
-// between its current rendered alpha and a target alpha, instead of hard-
-// snapping mesh visibility. Used by the layer toggles (Quanta / Strings /
-// Lattice) so turning them on or off feels like a fade rather than a pop.
-//
-// Implementation: writes window.S._xfade[<xfadeKey>] each frame, which the
-// engine reads as the authoritative material opacity. When the fade reaches
-// the target it clears the xfade entry, restoring the cheap hard-state read
-// path (the engine falls back to window.S[stateKey] when no xfade is set).
-//
-// Self-cancelling: each call cancels any in-flight fade for the same key
-// and resumes from the current alpha — rapid toggling can't desync the
-// animation against the underlying boolean state.
+// Fade a visibility toggle (showParticles / showRibbons / tessRibbons)
+// instead of hard-snapping. Writes window.S._xfade[<key>] each frame;
+// engine reads that as the material opacity, falling back to the boolean
+// when no xfade is set. Self-cancelling — repeated toggles resume from
+// current alpha, never desync.
 function fadeVisibilityKey(stateKey, fromAlpha, toAlpha, duration = 300) {
     const xfadeKey = VISIBILITY_XFADE_KEYS[stateKey];
     if (!xfadeKey) return;
@@ -330,26 +335,12 @@ function fadeVisibilityKey(stateKey, fromAlpha, toAlpha, duration = 300) {
     window._xfadeTimers[xfadeKey] = requestAnimationFrame(tick);
 }
 
-// Animate a color-mode change with a V-envelope opacity dip. Unlike layer
-// toggles (Quanta/Strings/Lattice) which fade between alpha 0↔1, colorMode
-// is a discrete mode flip — there's no "fractional mode" the shader can
-// render. The trick (lifted from the tour-transition machinery) is to fade
-// EVERYTHING visible to ~0, swap the discrete mode at the trough, and fade
-// back to full. Visually it reads as a smooth crossfade.
-//
-// Implementation deliberately uses a SEPARATE channel (window.S._xfadeEnv)
-// rather than mutating _xfade.{particles,ribbons,lattice} directly. Reasons:
-//   1. If a user toggled a layer off just before changing colorMode, that
-//      layer fade is in-flight via _xfade. Clobbering _xfade would kill it.
-//      The envelope multiplies onto whatever the layer fade is doing.
-//   2. At fade completion we clear ONLY _xfadeEnv, never touching _xfade —
-//      so the layer fades' own cleanup paths stay authoritative.
-//   3. Engine read becomes: alpha = (xfade_layer ?? bool) * (xfadeEnv ?? 1).
-//
-// Self-cancelling: a second colorMode change mid-envelope cancels the prior
-// timer. If the new target equals the prior target, we exit immediately
-// (covers double-clicks on the same mode button). Otherwise we restart the
-// envelope from the current envelope value, so the dip is continuous.
+// Animate colorMode change with a V-envelope: fade everything to 0,
+// swap the discrete mode at the trough, fade back to 1. Uses a separate
+// channel (window.S._xfadeEnv) so it multiplies onto any in-flight layer
+// fades instead of clobbering them.
+// Engine read: alpha = (xfade_layer ?? bool) * (xfadeEnv ?? 1).
+// Self-cancelling — mid-envelope changes restart from current envelope.
 function fadeColorModeChange(toMode, duration = 600) {
     if (window.S.colorMode === toMode) return; // already there
     if (window._xfadeColorModeTarget === toMode && window._xfadeColorModeTimer) {
@@ -362,12 +353,6 @@ function fadeColorModeChange(toMode, duration = 600) {
     }
     window._xfadeColorModeTarget = toMode;
 
-    // Same-target guard at function entry already prevents re-running an
-    // identical fade. For DIFFERENT-target rapid clicks the prior timer is
-    // cancelled and a fresh V-envelope runs from t=0 — there can be a small
-    // visual hitch as opacity jumps from the dipped value back to 1, but
-    // since the user is actively re-choosing a mode that hitch reads as
-    // responsiveness rather than a bug.
     const start = performance.now();
     let flipped = false;
 
@@ -375,7 +360,7 @@ function fadeColorModeChange(toMode, duration = 600) {
         const t = Math.min(1, (now - start) / duration);
         // V-envelope: ^0.7 widens the dip so it reads as a smooth dip rather
         // than a knife-edge cut. Same shape used by tour transitions for
-        // colorMode flips, so user toggles feel consistent with tour visuals.
+        // colorMode flips, so user toggles feel consistent with tour optics.
         const env = Math.pow(Math.abs(2 * t - 1), 0.7);
         window.S._xfadeEnv = env;
 
@@ -463,19 +448,10 @@ export function saveWP() {
     } catch (e) { console.error('Failed to save waypoints', e); }
 }
 
-// Paint the app's background onto an arbitrary 2D canvas context, sized to
-// fill the rectangle (0,0)..(w,h). Used by both the full-res screenshot
-// path and the thumbnail capture paths so all three produce visually
-// consistent results when "Include Background" is on.
-//
-// The background the user sees on-screen is two layers:
-//   1. A solid void color (#040410) — body background
-//   2. A CSS radial gradient on the #bgGlow DIV
-//
-// The bgGlow DIV is NOT a canvas — drawImage(bgGlowDiv, ...) is a silent
-// no-op which is the bug we used to ship. We reconstruct the CSS gradient
-// here using the same colorMode/hue/sat math the engine uses in
-// updateUniforms() to set the DIV's background-image.
+// Paint the app's background (void + radial gradient) onto a 2D canvas
+// context. Used by screenshot and thumbnail paths. The on-screen #bgGlow
+// is a DIV with a CSS gradient, not a canvas, so we reconstruct the
+// gradient here using the same colorMode/hue/sat math as updateUniforms().
 function paintBackgroundLayer(ctx, w, h) {
     ctx.fillStyle = '#040410';
     ctx.fillRect(0, 0, w, h);
@@ -533,14 +509,10 @@ function paintBackgroundLayer(ctx, w, h) {
     ctx.globalAlpha = 1;
 }
 
-// Save a high-resolution PNG screenshot of the current canvas state to the
-// user's download folder. Filename includes a coordinate hash + local-time
-// stamp so collisions are essentially impossible and users can sort by date.
-// Honors window.S.includeScreenshotBg for whether to fill the void color.
-// Used by both captureWaypoint (new) and captureThumbnailFor (recapture) so
-// "save screenshot on capture" applies consistently to both actions —
-// recapturing a thumbnail also doubles as a screenshot when that toggle is
-// on, matching user expectation that any "shutter press" produces a file.
+// Save a high-res PNG screenshot to the user's downloads. Filename has a
+// coord hash + local-time stamp for sorting/dedup. Used by both
+// captureWaypoint and captureThumbnailFor recapture — any "shutter press"
+// produces a file when the toggle is on.
 function downloadFullResScreenshot(engine) {
     try {
         const canvas = engine.canvas;
@@ -552,12 +524,8 @@ function downloadFullResScreenshot(engine) {
             paintBackgroundLayer(fctx, full.width, full.height);
         }
         fctx.drawImage(canvas, 0, 0, full.width, full.height);
-        // Bake the CRT scanline overlay into the screenshot if the user opted
-        // in. Mirrors the body::after CSS pseudo-element: 2px-tall repeating
-        // pattern where every other row is filled with the theme-appropriate
-        // tint, alpha = screenScanlines (0..0.5). Without this, screenshots
-        // would look "cleaner" than the live view and lose the CRT character
-        // that's a signature of the visual identity.
+        // Bake CRT scanlines into the screenshot if opted in. Mirrors
+        // the body::after CSS pseudo-element.
         if (window.S.includeScreenshotScanlines) {
             const alpha = Math.max(0, Math.min(0.5, window.S.screenScanlines ?? 0));
             if (alpha > 0.001) {
@@ -610,12 +578,8 @@ export async function captureWaypoint() {
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
 
-    // Honor the Include → Background toggle on the initial capture, same
-    // as the recapture path does. Previously this used drawImage(bgCanvas)
-    // unconditionally, which was a silent no-op because bgCanvas is a DIV
-    // with a CSS gradient, not an actual canvas. Result: the background
-    // never made it into the thumbnail regardless of the toggle. Fixed by
-    // routing through paintBackgroundLayer when the toggle is on.
+    // Honor Include → Background toggle. (Previously used drawImage on the
+    // bgCanvas DIV — silent no-op. Now routes through paintBackgroundLayer.)
     if (window.S.includeScreenshotBg) {
         paintBackgroundLayer(ctx, tw, th);
     }
@@ -633,7 +597,7 @@ export async function captureWaypoint() {
     const params = captureParamState();
     const mods = captureModState();
     
-    const visuals = {
+    const optics = {
         colorMode: window.S.colorMode,
         hue: window.S.hue,
         sat: window.S.sat,
@@ -665,13 +629,16 @@ export async function captureWaypoint() {
         notes: '',
         category: window.S.lastWpCat || 'Waypoints',
         params,
-        visuals,
+        optics,
         camDist: engine.cam.dist,
         camQuatArr: engine.cam.quat.toArray(),
         camPosArr: engine.cam.pos.toArray(),
         timestamp: Date.now(),
         thumbnail: thumb,
-        thumbAspect: aspect
+        thumbAspect: aspect,
+        // Frozen at capture time so renaming yourself doesn't rewrite the past.
+        authorId:   window.profile?.id || '',
+        authorName: window.profile?.username || ''
     };
 
     window.waypoints.unshift(wp);
@@ -680,16 +647,9 @@ export async function captureWaypoint() {
     if (window.buildAtlasUI) window.buildAtlasUI(engine);
 }
 
-// Capture only a thumbnail for an EXISTING waypoint. Used when the user
-// imports a waypoint via share-string (no thumbnail) then navigates and
-// hits "Capture Thumbnail" — gives them the chance to frame the shot
-// themselves rather than us auto-traveling and snapping a generic view.
-//
-// Guard: only captures if current parameters match the waypoint's stored
-// params. This prevents the user from accidentally pinning a thumbnail of
-// some unrelated simulation state onto a waypoint, which would silently
-// corrupt the atlas. Camera position is NOT checked — the user might be
-// circling the location to set up a tour-stop framing angle.
+// Match current sim params against a waypoint's stored params, within
+// tolerance. Camera position is not checked — the user might be circling
+// to frame a tour-stop angle.
 export function isAtWaypointParams(wp, tolerance = 0.001) {
     if (!wp || !wp.params) return false;
     for (const k of PARAM_KEYS) {
@@ -710,13 +670,8 @@ export function isAtWaypointParams(wp, tolerance = 0.001) {
 }
 window.isAtWaypointParams = isAtWaypointParams;
 
-// Returns the id of the waypoint whose stored params match the current
-// state, or null if the user isn't "at" any saved location. Used to:
-//   • highlight the current row in the atlas list
-//   • start sequential tours from the user's current location
-//   • show a "you are here" indicator
-// First match wins — if multiple waypoints share the same coordinates,
-// we pick the topmost in the list (the user's drag-reorder preference).
+// Returns the id of the waypoint whose params match current state, or
+// null. First match wins.
 export function getCurrentWaypointId() {
     const wps = window.waypoints;
     if (!wps || !wps.length) return null;
@@ -753,12 +708,8 @@ export async function captureThumbnailFor(wpId) {
     const ctx = tc.getContext('2d');
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
-    // Background: only paint when the user opted in. Previously both
-    // branches of an if/else here called drawImage(bgCanvas) which was a
-    // silent no-op (bgCanvas is the bgGlow DIV, not a canvas) — meaning
-    // the toggle had no effect on recaptures either. Route through the
-    // shared helper so this path stays consistent with the initial-capture
-    // and full-res screenshot paths.
+    // Background: paint only when opted in. Same paintBackgroundLayer path
+    // as the initial-capture and full-res screenshot flows.
     if (window.S.includeScreenshotBg) {
         paintBackgroundLayer(ctx, tw, th);
     }
@@ -786,22 +737,15 @@ window.captureThumbnailFor = captureThumbnailFor;
 export function travelTo(wp) {
     if (!wp) return;
     const dur = window.tour && window.tour.active ? 5000 + Math.random() * 3000 : 5000;
-    startTransition(wp.params, wp.camDist, wp.camQuatArr, wp.visuals, wp.camPosArr, dur);
-    // Tag the in-flight transition with the destination waypoint id so the
-    // atlas can highlight "we're going here" immediately, rather than waiting
-    // for params to match (which only happens after the transition completes
-    // and would leave the highlight stuck on the source waypoint or nothing).
-    // This mirrors how tour mode uses tour.wpIdx for live highlight tracking.
+    startTransition(wp.params, wp.camDist, wp.camQuatArr, wp.optics, wp.camPosArr, dur);
+    // Tag the in-flight transition so the atlas can highlight the destination
+    // immediately, not wait for param interpolation to complete.
     if (window.transition) window.transition.targetWpId = wp.id;
     if (window.buildAtlasUI && window.engine) window.buildAtlasUI(window.engine);
 }
 
-// Homepoint: a single "favorite spot" saved in window.S.homepoint. Functions
-// like a sticky waypoint without taking up space in the atlas list. The
-// Home key and the bottom-of-Params "Homepoint" button both travel back to
-// it; the green +Homepoint button in the Params panel head saves the
-// current state as the new homepoint. Stored in window.S so it persists
-// across sessions via the ss_state localStorage flow.
+// Homepoint: a sticky "favorite spot" in window.S.homepoint. Reachable via
+// the Home key and the Params footer button. Persists with ss_state.
 export function captureHomepoint() {
     const engine = window.engine;
     if (!engine) return;
@@ -811,7 +755,7 @@ export function captureHomepoint() {
         // matches the contract travelTo expects).
         id: 'homepoint',
         params: captureParamState(),
-        visuals: {
+        optics: {
             colorMode: window.S.colorMode,
             hue: window.S.hue, sat: window.S.sat, lightness: window.S.lightness,
             opacity: window.S.opacity, tempo: window.S.tempo,
@@ -880,15 +824,10 @@ export function stopTour() {
     if (!tour.active) return;
     tour.active = false;
     window.transition = null;
-    // Clear any in-flight visibility crossfade. Without this, _xfade
-    // outlives window.transition and gets read as authoritative by the
-    // engine on subsequent frames — pinning particles visible regardless
-    // of the Quanta toggle. _xfade and window.transition are coupled
-    // state and should always be torn down together.
+    // _xfade and window.transition are coupled state — tear down together
+    // or stale alphas pin layer visibility past the transition.
     delete window.S._xfade;
-    // Same reasoning for the color-mode envelope channel — cancel any
-    // in-flight envelope timer and clear the multiplier so layers don't
-    // get pinned at reduced opacity by a stale envelope value.
+    // Same for the colorMode envelope channel.
     if (window._xfadeColorModeTimer) {
         cancelAnimationFrame(window._xfadeColorModeTimer);
         window._xfadeColorModeTimer = null;
@@ -917,13 +856,8 @@ export function nextTourStop() {
         tour.wpIdx = (tour.wpIdx + 1) % window.waypoints.length;
     }
     if (window.buildAtlasUI) window.buildAtlasUI(window.engine);
-    // Follow the active waypoint in the atlas list. Without this, random-mode
-    // tours feel disorienting because the highlighted row can be off-screen
-    // entirely; sequential tours also benefit when the list is long enough
-    // to scroll. We scroll AFTER buildAtlasUI repaints (next frame) so the
-    // .is-tour-active class is on the new row before we measure it. Uses
-    // 'nearest' block alignment so we only scroll when actually necessary —
-    // if the row is already visible, no jitter.
+    // Scroll the active row into view AFTER the rebuild paints (next frame)
+    // so .is-tour-active is on the new row before we measure it.
     requestAnimationFrame(() => {
         const activeRow = document.querySelector('#atlasBody .wp-row-card.is-tour-active');
         if (activeRow && typeof activeRow.scrollIntoView === 'function') {
@@ -960,7 +894,7 @@ export function showDelModal(id, name) {
     p.appendChild(document.createTextNode('Delete waypoint'));
     p.appendChild(document.createElement('br'));
     const nameSpan = document.createElement('span');
-    nameSpan.style.color = '#8ab8e8';
+    nameSpan.className = 'modal-name';
     nameSpan.textContent = '"' + sanitizeName(name, { maxLen: 200 }) + '"';
     p.appendChild(nameSpan);
     p.appendChild(document.createElement('br'));
@@ -1002,7 +936,7 @@ function startTransition(toP, toD, toQArr, toV, toPArr, dur = 5000) {
         camDist: engine.cam.dist,
         camQuat: engine.cam.quat.clone(),
         camPos: engine.cam.pos.clone(),
-        visuals: {
+        optics: {
             opacity: window.S.opacity,
             tempo: window.S.tempo,
             offsetX: window.S.offsetX || 0,
@@ -1059,14 +993,10 @@ function startTransition(toP, toD, toQArr, toV, toPArr, dur = 5000) {
         lattice: toFlags.tessRibbons ? 1 : 0
     };
 
-    // All three layers participate in the cross-fade. We keep meshes alive
-    // through the transition by setting showXxx true if EITHER end wants
-    // visibility — _xfade is read as authoritative material.opacity by the
-    // engine, so the boolean just needs to be "render this mesh at all" for
-    // the duration. At transition end, the toFlags values are restored (see
-    // updateTransition's t>=1 branch). Previously only particles xfaded;
-    // strings/lattice hard-snapped at midpoint, which felt jarring when
-    // toggling between waypoints with different layer compositions.
+    // Keep meshes alive through the transition: showXxx = true if either
+    // end wants visibility. _xfade is authoritative material.opacity; the
+    // boolean just gates "render this mesh at all" for the duration.
+    // toFlags values are restored at t>=1.
     window.S.showParticles = fromVisibility.particles > 0.001 || toVisibility.particles > 0.001;
     window.S.showRibbons   = fromVisibility.ribbons   > 0.001 || toVisibility.ribbons   > 0.001;
     window.S.tessRibbons   = fromVisibility.lattice   > 0.001 || toVisibility.lattice   > 0.001;
@@ -1091,7 +1021,7 @@ function startTransition(toP, toD, toQArr, toV, toPArr, dur = 5000) {
             camDist: toD !== undefined ? toD : engine.cam.dist,
             camQuat: toQ,
             camPos: toPos,
-            visuals: toV
+            optics: toV
         },
         startTime: performance.now(),
         duration: dur
@@ -1147,19 +1077,13 @@ export function updateTransition() {
     let ribbonsOpacity  = clamp01(xfade(fromVisibility.ribbons,   toVisibility.ribbons));
     let latticeOpacity  = clamp01(xfade(fromVisibility.lattice,   toVisibility.lattice));
 
-    // Color-mode opacity-illusion crossfade. The discrete colorMode flip at
-    // t=0.5 looks jarring when modes differ wildly (Spectral neon vs. Velocity
-    // muted, etc.). Multiply the existing crossfade by a V-shaped envelope so
-    // particles dip to ~0 right at the flip, then return — the user perceives
-    // a clean crossfade rather than a hard cut. Linear color-space interpolation
-    // would be cleaner in theory but is too complex for the discrete-mode
-    // shader pipeline; this opacity trick achieves the same UX outcome.
-    // Applied to ribbons/lattice too since they also re-color by mode.
+    // ColorMode crossfade: multiply existing fade by V-envelope so particles
+    // dip to ~0 at the discrete-mode flip (t=0.5), then recover. Applied to
+    // ribbons/lattice too since they re-color by mode.
     const fromCM = (fromFlags && fromFlags.colorMode);
     const toCM   = (toFlags   && toFlags.colorMode);
     if (fromCM !== undefined && toCM !== undefined && fromCM !== toCM) {
-        // Pow < 1 widens the dip; ^0.7 gives a perceptually balanced V with
-        // ~30% width at half-opacity. Pure |2t-1| would be too sharp.
+        // ^0.7 widens the dip to ~30% at half-opacity. Pure |2t-1| too sharp.
         const env = Math.pow(Math.abs(2 * t - 1), 0.7);
         particleOpacity *= env;
         ribbonsOpacity  *= env;
@@ -1179,7 +1103,7 @@ export function updateTransition() {
     window.S.tessRibbons   = latticeOpacity  > 0.001 || !!toFlags.tessRibbons;
     syncTransitionUI(['showParticles', 'showRibbons', 'tessRibbons']);
 
-    // Discrete visuals switch at midpoint.
+    // Discrete visual switch at midpoint.
     if (!window.transition._discreteFlipped && t >= 0.5) {
         if (toFlags.shape && toFlags.shape !== window.S.shape) {
             window.S.shape = toFlags.shape;
@@ -1263,30 +1187,19 @@ export function buildAtlasUI(engine) {
         }
     }
 
-    // Capture scroll position from the prior render so the list doesn't jump
-    // to top every time we rebuild (which happens on every tour step, drag-
-    // drop, capture, and many other UI events). Atlas previously used an
-    // inner listContainer with its own overflow, which made the scrollbar
-    // appear inset from the panel edge and crowded the Import row visually.
-    // Now `body` (the .panel-body itself) is the scroll container, matching
-    // every other panel — so the scrollbar sits cleanly at the panel edge.
+    // Preserve scroll position across rebuilds (which happen on every tour
+    // step, drag-drop, and capture). Body is the .panel-body itself, so
+    // scrollbar sits at the panel edge like every other panel.
     const prevScroll = body.scrollTop;
 
     body.innerHTML = '';
-    // Reset any flex layout set by a previous build. We want body to behave
-    // like a normal scrollable column: default block flow + native overflow.
     body.style.display = '';
     body.style.flexDirection = '';
 
-    // listContainer is now just a logical alias for body — all subsequent
-    // append calls flow into the panel-body directly. Keeping the name
-    // avoids a sweeping rename of every appendChild target below.
+    // listContainer aliases body — kept to avoid renaming every appendChild below.
     const listContainer = body;
 
-    // Restore scroll position after children are populated. The actual append
-    // happens below this function's flow; setting scrollTop now is fine
-    // because browsers clamp to content size — if content is shorter than
-    // the saved position, scrollTop just lands at max scroll.
+    // Restore after children populate. Browsers clamp to content size.
     requestAnimationFrame(() => { body.scrollTop = prevScroll; });
 
     if (typeof window.atlasView === 'string' && window.atlasView !== 'list') {
@@ -1294,8 +1207,11 @@ export function buildAtlasUI(engine) {
         if (!wp) { window.atlasView = 'list'; buildAtlasUI(engine); return; }
 
         const bk = document.createElement('div');
-        bk.style.cssText = 'font-size:9px;color:#8ab8e8;cursor:pointer;margin-bottom:8px;display:inline-block';
-        bk.textContent = '\u25c2 Back to List';
+        // Sticky "Back to Atlas" link — pinned to top of the scrolling
+        // detail view so it's always reachable.
+        bk.className = 'wp-back';
+        bk.style.cssText = 'font-size:9px;cursor:pointer;margin-bottom:8px;display:inline-block;position:sticky;top:0;padding:6px 0 10px;margin-top:-6px;z-index:5;';
+        bk.textContent = '\u25c2 Back to Atlas';
         bk.addEventListener('click', () => { window.atlasView = 'list'; buildAtlasUI(engine); });
         listContainer.appendChild(bk);
 
@@ -1365,77 +1281,139 @@ export function buildAtlasUI(engine) {
 
         listContainer.appendChild(tf);
 
-        const rw = document.createElement('div');
-        rw.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:8px';
+        // ─── Header row: name (editable, left) + travel button (right) ────
+        const hdrRow = document.createElement('div');
+        hdrRow.style.cssText = 'display:flex;align-items:flex-start;gap:8px;margin-bottom:6px;';
         const cn = document.createElement('input');
         cn.className = 'wp-edit';
-        cn.style.fontSize = '12px'; cn.style.fontWeight = 'bold'; cn.style.color = '#8ab8e8'; cn.style.background = 'transparent'; cn.style.border = 'none'; cn.style.width = '100%';
+        cn.style.cssText = 'flex:1;min-width:0;font-size:13px;font-weight:bold;color:#e6f0fa;background:transparent;border:none;padding:4px 0;';
         cn.value = wp.name;
         cn.addEventListener('change', e => { wp.name = e.target.value; saveWP(); });
-        rw.appendChild(cn);
-        listContainer.appendChild(rw);
+        hdrRow.appendChild(cn);
 
+        // Travel button — airplane glyph, stops active tour before traveling.
+        const travelBtn = document.createElement('div');
+        travelBtn.className = 'wp-travel-hdr';
+        travelBtn.title = 'Travel to this location';
+        travelBtn.textContent = '\u2708';
+        travelBtn.addEventListener('click', () => {
+            if (tour.active) stopTour();
+            travelTo(wp);
+        });
+        hdrRow.appendChild(travelBtn);
+        listContainer.appendChild(hdrRow);
+
+        // Discovered-by line — brand-color "discovered by" + white name.
+        // Falls back to 'Synthesist' role when authorName is empty.
+        const discoBy = document.createElement('div');
+        discoBy.className = 'wp-discoby';
+        discoBy.style.cssText = 'font-size:9px;letter-spacing:0.05em;margin-top:-4px;margin-bottom:12px;';
+        const discoLabel = document.createElement('span');
+        discoLabel.className = 'wp-discoby-label';
+        discoLabel.textContent = 'discovered by ';
+        const discoNameEl = document.createElement('span');
+        discoNameEl.className = 'wp-discoby-name';
+        discoNameEl.textContent = sanitizeName(wp.authorName, { maxLen: 64 }) || 'Synthesist';
+        discoBy.appendChild(discoLabel);
+        discoBy.appendChild(discoNameEl);
+        listContainer.appendChild(discoBy);
+
+        // ─── Notes (description) ──────────────────────────────────────────
         const desc = document.createElement('textarea');
-        desc.className = 'wp-edit';
-        desc.style.fontSize = '10px'; desc.style.color = '#bbccdd'; desc.style.background = 'rgba(20,20,40,0.5)'; desc.style.border = '1px solid rgba(40,40,70,0.5)'; desc.style.width = '100%'; desc.style.height = '60px'; desc.style.padding = '6px'; desc.style.marginTop = '4px'; desc.style.borderRadius = '4px';
-        desc.placeholder = 'Add a cosmic description...';
+        desc.className = 'wp-edit wp-notes-area';
+        desc.style.cssText = 'font-size:10px;width:100%;height:60px;padding:6px;border-radius:4px;box-sizing:border-box;';
+        desc.placeholder = 'Observation notes';
         desc.value = wp.notes || '';
         desc.addEventListener('change', e => { wp.notes = e.target.value; saveWP(); });
         listContainer.appendChild(desc);
 
-        const ac = document.createElement('div');
-        ac.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:8px;margin-top:16px';
-        const goBtn = document.createElement('div');
-        goBtn.className = 'btn';
-        goBtn.style.color = '#6aaa7a';
-        goBtn.textContent = 'Travel to this Location \u2708';
-        goBtn.addEventListener('click', () => { if (tour.active) stopTour(); travelTo(wp); });
-        ac.appendChild(goBtn);
+        // ─── Share Coordinates ────────────────────────────────────────────
+        // Live-updating share-code builder. Toggle inclusion of title/notes/
+        // author/optics; the section subhead shows live character count.
+        // All four toggles persist across sessions via window.S.shareInclude*
+        // and are shared with the quick-share button on each waypoint card.
+        const shareWrap = document.createElement('div');
+        shareWrap.style.cssText = 'margin-top:14px;';
+        listContainer.appendChild(shareWrap);
 
-        const shareSect = document.createElement('div');
-        shareSect.style.cssText = 'width:100%;margin-top:6px;display:flex;flex-direction:column;gap:6px;';
-        const shareLbl = document.createElement('div');
-        shareLbl.style.cssText = 'font-size:8px;letter-spacing:0.18em;color:#8899aa;text-transform:uppercase;';
-        shareLbl.textContent = 'Share Coordinates';
-        shareSect.appendChild(shareLbl);
-        
-        const shareStr = (typeof encodeShareString === 'function') ? encodeShareString(wp) : '';
-        const shareRow = document.createElement('div');
-        shareRow.style.cssText = 'display:flex;gap:4px;';
-        const shareInput = document.createElement('input');
-        shareInput.type = 'text';
-        shareInput.readOnly = true;
-        shareInput.value = shareStr || '';
-        shareInput.style.cssText = 'flex:1;font-size:9px;background:rgba(8,8,16,0.7);border:1px solid rgba(40,40,70,0.6);color:#cce6ff;padding:5px 7px;border-radius:3px;font-family:inherit;outline:none;';
-        shareInput.addEventListener('focus', () => shareInput.select());
-        shareRow.appendChild(shareInput);
-        
+        // shareSubEl reference held for live char count updates.
+        const shareHdr = makeSection(shareWrap, 'Share Coordinates', '… characters');
+        const shareSubEl = shareHdr.querySelector('.section-sub');
+
+        // Multi-select pills (not tabs) — any combination can be on.
+        const shareToggles = makeButtonRow(shareWrap, [
+            { label: 'Title',       key: 'shareIncludeTitle'    },
+            { label: 'Notes',      key: 'shareIncludeNotes'   },
+            { label: 'Author', key: 'shareIncludeAuthor'  },
+            { label: 'Optics',    key: 'shareIncludeOptics' }
+        ]);
+
+        // Share string display + overlaid copy button (top-right corner of
+        // the field). Field is user-selectable so manual copy also works.
+        const shareWrapper = document.createElement('div');
+        shareWrapper.style.cssText = 'position:relative;margin-top:8px;';
+        shareWrap.appendChild(shareWrapper);
+
+        const shareStrEl = document.createElement('div');
+        shareStrEl.style.cssText = 'font-family:monospace,"Courier New";font-size:9px;color:#cce6ff;background:rgba(8,8,16,0.7);border:1px solid rgba(40,40,70,0.6);padding:8px 56px 8px 8px;border-radius:3px;word-break:break-all;line-height:1.4;user-select:text;-webkit-user-select:text;';
+        shareWrapper.appendChild(shareStrEl);
+
         const copyBtn = document.createElement('div');
         copyBtn.className = 'btn';
-        copyBtn.style.cssText = 'cursor:pointer;color:#cce6ff;padding:5px 10px;font-size:8px;';
+        // Solid bg + z-index so "Copied!" feedback stays above the string.
+        copyBtn.style.cssText = 'position:absolute;top:19px;right:4px;cursor:pointer;color:#cce6ff;padding:3px 8px;font-size:8px;letter-spacing:0.06em;border-radius:2px;z-index:2;background:rgba(8,8,16,0.92);';
         copyBtn.textContent = 'Copy';
+        shareWrapper.appendChild(copyBtn);
+
+        // Cached so Copy doesn't re-encode.
+        let _currentShareStr = '';
+
+        const buildShareOpts = () => ({
+            includeName:    window.S.shareIncludeTitle    !== false,
+            includeNotes:   window.S.shareIncludeNotes   !== false,
+            includeAuthor:  window.S.shareIncludeAuthor  !== false,
+            includeOptics: window.S.shareIncludeOptics !== false
+        });
+
+        // Token-guarded async update — only the most recent call's result
+        // lands in the UI, so rapid toggle storms can't show stale strings.
+        let _shareUpdateToken = 0;
+        const refreshShareString = async () => {
+            const token = ++_shareUpdateToken;
+            const opts = buildShareOpts();
+            const str = await encodeShareString(wp, opts);
+            if (token !== _shareUpdateToken) return; // stale; a newer call superseded us
+            _currentShareStr = str || '';
+            shareStrEl.textContent = _currentShareStr;
+            if (shareSubEl) shareSubEl.textContent = _currentShareStr.length + ' characters';
+        };
+        refreshShareString();
+
+        // Register so toggles trigger refresh via _toggleUpdaters dispatch.
+        window._toggleUpdaters = window._toggleUpdaters || {};
+        ['shareIncludeTitle', 'shareIncludeNotes', 'shareIncludeAuthor', 'shareIncludeOptics'].forEach(k => {
+            if (!window._toggleUpdaters[k]) window._toggleUpdaters[k] = new Set();
+            window._toggleUpdaters[k].add(refreshShareString);
+        });
+
         copyBtn.addEventListener('click', async () => {
-            const ok = await copyToClipboard(shareStr);
+            if (!_currentShareStr) {
+                // Ensure we have a string even if the user clicks Copy
+                // before the first encodeShareString promise resolved
+                // (extremely fast race; defensive only).
+                await refreshShareString();
+            }
+            const ok = await copyToClipboard(_currentShareStr);
             copyBtn.textContent = ok ? 'Copied!' : 'Failed';
             setTimeout(() => copyBtn.textContent = 'Copy', 1500);
         });
-        shareRow.appendChild(copyBtn);
-        shareSect.appendChild(shareRow);
-        
-        const shareHelp = document.createElement('div');
-        shareHelp.style.cssText = 'font-size:8px;color:#5a6a7a;line-height:1.4;';
-        shareHelp.textContent = 'Paste this string anywhere. Recipients import via the Atlas list.';
-        shareSect.appendChild(shareHelp);
-        
-        listContainer.appendChild(shareSect);
-        
+
+        // ─── Delete link ──────────────────────────────────────────────────
         const delLk = document.createElement('div');
-        delLk.style.cssText = 'color:#bb6666;font-size:8px;cursor:pointer;text-decoration:underline;margin-top:12px;';
+        delLk.style.cssText = 'color:#bb6666;font-size:8px;cursor:pointer;text-decoration:underline;margin-top:16px;margin-bottom:8px;text-align:center;';
         delLk.textContent = 'delete waypoint';
         delLk.addEventListener('click', () => showDelModal(wp.id, wp.name));
-        ac.appendChild(delLk);
-
-        listContainer.appendChild(ac);
+        listContainer.appendChild(delLk);
     } else {
         const importSect = document.createElement('div');
         importSect.style.cssText = 'display:flex;gap:4px;margin-bottom:10px;';
@@ -1464,26 +1442,20 @@ export function buildAtlasUI(engine) {
         cats.forEach(cat => {
             const wps = window.waypoints.filter(w => (w.category || 'Waypoints') === cat);
             if (wps.length === 0 && cat !== 'Waypoints') return;
-            // Same .section class used everywhere else for consistency.
-            // Count appears in parens, lighter, after the label.
+            // Atlas category header — raw flex (not makeSection) because the
+            // count sits inline with the label. textContent only since `cat`
+            // can come from imported waypoints (untrusted).
             const ch = document.createElement('div');
-            ch.className = 'section';
-            // DOM construction rather than innerHTML — cat can come from
-            // imported waypoints (untrusted). The validator strips control
-            // chars and length-caps but doesn't escape HTML; using
-            // textContent makes that escaping unnecessary by construction.
-            ch.appendChild(document.createTextNode(cat + ' '));
+            ch.style.cssText = 'display:flex;align-items:baseline;gap:6px;color:#d9edf6;font-size:11px;letter-spacing:0.04em;margin-top:14px;margin-bottom:6px;';
+            const chLabel = document.createElement('span');
+            chLabel.textContent = cat;
+            ch.appendChild(chLabel);
             const cnt = document.createElement('span');
-            cnt.style.cssText = 'opacity:0.5;font-weight:normal;letter-spacing:0.05em;';
+            cnt.style.cssText = 'color:#718a99;font-size:8px;letter-spacing:0.05em;';
             cnt.textContent = '(' + wps.length + ')';
             ch.appendChild(cnt);
-            // The first category header sits directly below the Import row,
-            // which already provides visual separation. Stripping the top
-            // border here avoids a stacked-divider look. Subsequent category
-            // headers keep their borders to delimit groups.
+            // First header sits under Import — trim top margin.
             if (_atlasFirstSection) {
-                ch.style.borderTop = 'none';
-                ch.style.paddingTop = '0';
                 ch.style.marginTop = '4px';
                 _atlasFirstSection = false;
             }
@@ -1499,13 +1471,8 @@ export function buildAtlasUI(engine) {
                     window.waypoints[tour.wpIdx] &&
                     window.waypoints[tour.wpIdx].id === wp.id;
                 if (isTourTarget) cd.classList.add('is-tour-active');
-                // "You are here" — non-tour highlight when the user is at or
-                // traveling to this waypoint. During an in-flight direct
-                // travel, transition.targetWpId tells us the user's intent
-                // before params have finished interpolating; falling back to
-                // parameter match handles the steady state after travel ends
-                // and the no-transition case (user manually adjusted params
-                // to match a saved location).
+                // "You are here" — during in-flight travel, targetWpId
+                // signals intent before params finish interpolating.
                 const inFlightTargetId = window.transition && window.transition.targetWpId;
                 const isCurrent = inFlightTargetId
                     ? (inFlightTargetId === wp.id)
@@ -1577,7 +1544,8 @@ export function buildAtlasUI(engine) {
                 inf.appendChild(nm);
                 if (wp.isImported) {
                     const sub = document.createElement('div');
-                    sub.style.cssText = 'font-size:8px;color:#7a9acc;letter-spacing:0.08em;text-transform:uppercase;margin-top:1px;';
+                    sub.className = 'wp-imported-tag';
+                    sub.style.cssText = 'font-size:8px;letter-spacing:0.08em;text-transform:uppercase;margin-top:1px;';
                     sub.textContent = 'imported';
                     inf.appendChild(sub);
                 }
@@ -1610,34 +1578,50 @@ export function buildAtlasUI(engine) {
         }
     }
 
-    if (window.waypoints && window.waypoints.length > 0) {
-        const ftr = document.createElement('div');
-        // Footer holds the Sequence/Random mode toggles and the Start/Pause
-        // Tour button. Sticky-bottom inside the now-flattened scroll body
-        // (panel-body itself scrolls), so as the user scrolls the list the
-        // footer stays pinned. Negative horizontal/bottom margins extend
-        // through panel-body's padding so the footer fills the panel edge-
-        // to-edge, masking content scrolling beneath. Background + backdrop
-        // blur give visual separation from the list above. Without the
-        // opaque background, the transparent panel let scrolled rows show
-        // through behind the controls — looked broken.
-        ftr.style.cssText = 'margin:14px -12px -10px;position:sticky;bottom:-10px;padding:10px 12px 12px;border-top:1px solid rgba(120,120,180,0.18);text-align:center;background:rgba(8,8,22,0.92);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);';;
+    // Footer content varies by view + tour state:
+    //   • List view: Sequence/Random toggles + Start/Pause Tour
+    //   • Detail + tour active: Stop Tour
+    //   • Detail + no tour: empty (collapses via :empty CSS rule)
+    // Lives in #atlasFooter outside the scroll container so the scrollbar
+    // doesn't shift it.
+    const footerEl = document.getElementById('atlasFooter');
+    if (footerEl) {
+        footerEl.innerHTML = '';
+        const onListView = (window.atlasView === 'list' || !window.atlasView);
+        if (onListView) {
+            if (window.waypoints && window.waypoints.length > 0) {
+                const modeRow = document.createElement('div');
+                footerEl.appendChild(modeRow);
+                makeGroupToggles(modeRow, [
+                    { label: 'Sequence', key: 'tourMode', matchVal: 'sequential', cb: () => { tour.mode = 'sequential'; } },
+                    { label: 'Random',   key: 'tourMode', matchVal: 'random',     cb: () => { tour.mode = 'random'; } }
+                ]);
 
-        const modeRow = document.createElement('div');
-        ftr.appendChild(modeRow);
-        makeGroupToggles(modeRow, [
-            { label: 'Sequence', key: 'tourMode', matchVal: 'sequential', cb: () => { tour.mode = 'sequential'; } },
-            { label: 'Random',   key: 'tourMode', matchVal: 'random',     cb: () => { tour.mode = 'random'; } }
-        ]);
-
-        const tbtn = document.createElement('div');
-        tbtn.className = 'tour-go-btn' + (tour.active ? ' active' : '');
-        tbtn.style.cssText = 'font-weight:600;font-size:10px;padding:9px;border-radius:3px;cursor:pointer;text-transform:uppercase;letter-spacing:2px;transition:all 200ms ease;text-align:center;';
-        tbtn.textContent = tour.active ? 'Pause Tour' : 'Start Tour';
-        tbtn.addEventListener('click', () => { if (tour.active) stopTour(); else startTour(); });
-        ftr.appendChild(tbtn);
-
-        body.appendChild(ftr);
+                const tbtn = document.createElement('div');
+                tbtn.className = 'tour-go-btn' + (tour.active ? ' active' : '');
+                tbtn.style.cssText = 'font-weight:600;font-size:10px;padding:9px;border-radius:3px;cursor:pointer;text-transform:uppercase;letter-spacing:2px;transition:all 200ms ease;text-align:center;margin-top:8px;';
+                tbtn.textContent = tour.active ? 'Pause Tour' : 'Start Tour';
+                tbtn.addEventListener('click', () => { if (tour.active) stopTour(); else startTour(); });
+                footerEl.appendChild(tbtn);
+            }
+        } else if (tour.active) {
+            // Detail view + tour active: compact right-aligned Stop Tour.
+            // Stopping a tour while on a detail view leaves the user on
+            // this detail view — they clearly wanted to look at this
+            // specific waypoint when they stopped touring, jumping them
+            // back to the list would be jarring.
+            const tourRow = document.createElement('div');
+            tourRow.style.cssText = 'display:flex;justify-content:flex-end;';
+            const tbtn = document.createElement('div');
+            tbtn.className = 'tour-go-btn active';
+            tbtn.style.cssText = 'font-weight:600;font-size:9px;padding:6px 12px;border-radius:3px;cursor:pointer;text-transform:uppercase;letter-spacing:1.5px;transition:all 200ms ease;';
+            tbtn.textContent = 'Stop Tour';
+            tbtn.addEventListener('click', () => stopTour());
+            tourRow.appendChild(tbtn);
+            footerEl.appendChild(tourRow);
+        }
+        // else: no footer content. The :empty CSS rule hides #atlasFooter
+        // entirely so there's no stray padding or border when empty.
     }
 }
 
@@ -1732,21 +1716,28 @@ export class Engine {
     }
 
     setupNavigationArrow() {
+        // Repositioned to the top of the viewport (was bottom) so it doesn't
+        // compete with the dock and footer controls. Semi-transparent white
+        // (was solid red) reads as a guidance cue rather than an alarm —
+        // the arrow exists to gently say "origin is over here," not to
+        // demand attention. Fade via opacity transition; the previous
+        // display:block/none flip caused a jarring pop.
         this.navArrow = document.createElement('div');
         this.navArrow.id = 'nav-arrow';
         this.navArrow.style.cssText = `
             position: fixed;
-            bottom: 40px;
+            top: 36px;
             left: 50%;
             transform: translateX(-50%);
-            width: 40px;
-            height: 40px;
-            background: rgba(255, 0, 0, 0.8);
+            width: 28px;
+            height: 28px;
+            background: rgba(255, 255, 255, 0.55);
             clip-path: polygon(50% 0%, 100% 100%, 50% 80%, 0% 100%);
             z-index: 1000;
             pointer-events: none;
-            display: none;
-            box-shadow: 0 0 15px rgba(255, 0, 0, 0.5);
+            opacity: 0;
+            transition: opacity 350ms ease;
+            box-shadow: 0 0 8px rgba(255, 255, 255, 0.25);
         `;
         document.body.appendChild(this.navArrow);
     }
@@ -1755,19 +1746,26 @@ export class Engine {
         if (!this.camera) return;
         const origin = new THREE.Vector3(0, 0, 0);
         const projected = origin.clone().project(this.camera);
-        
+
         const isOffScreen = Math.abs(projected.x) > 0.95 || Math.abs(projected.y) > 0.95 || projected.z > 1;
-        
+
         if (isOffScreen) {
-            this.navArrow.style.display = 'block';
+            // Pointing UPWARD at origin when off-screen. The arrow rotates
+            // toward the projected location. Note: rotation is set every
+            // frame the arrow is visible — independent of the opacity
+            // transition, which handles the fade in/out.
             const dx = projected.x;
             const dy = projected.y;
             const angle = Math.atan2(dy, dx) + Math.PI / 2;
             this.navArrow.style.transform = `translateX(-50%) rotate(${angle}rad)`;
-            const opacity = projected.z > 1 ? 1.0 : 0.6;
-            this.navArrow.style.background = `rgba(255, 0, 0, ${opacity})`;
+            // Opacity: 1 for "behind camera" (z>1, harder to find),
+            // 0.55 for "off-edge but in front." Read as urgency
+            // gradient — but always white, never red.
+            this.navArrow.style.opacity = projected.z > 1 ? '0.9' : '0.55';
         } else {
-            this.navArrow.style.display = 'none';
+            // Fade out rather than display:none — the CSS transition on
+            // opacity handles the smooth disappearance over 350ms.
+            this.navArrow.style.opacity = '0';
         }
     }
 
@@ -1784,18 +1782,63 @@ export class Engine {
     setupScene() {
         this.scene = new THREE.Scene();
         this.scene.fog = new THREE.FogExp2(0x040410, 0.001);
+        this.setupReferenceGrid();
+    }
+
+    // Reference sphere grid — a wireframe sphere centered on the origin
+    // that provides spatial orientation. Opacity is driven by
+    // window.S.referenceGrid (0..1, default 0). The mesh is always in
+    // the scene but invisible until the slider is raised.
+    setupReferenceGrid() {
+        const radius = 100;
+        const widthSegs = 24;
+        const heightSegs = 16;
+        const geo = new THREE.SphereGeometry(radius, widthSegs, heightSegs);
+        const wf = new THREE.WireframeGeometry(geo);
+        const mat = new THREE.LineBasicMaterial({
+            color: 0x50dcff,
+            transparent: true,
+            opacity: 0,
+            depthWrite: false
+        });
+        this.refGrid = new THREE.LineSegments(wf, mat);
+        this.refGrid.frustumCulled = false;
+        this.scene.add(this.refGrid);
+    }
+
+    updateReferenceGrid() {
+        if (!this.refGrid) return;
+        const v = (window.S && typeof window.S.referenceGrid === 'number') ? window.S.referenceGrid : 0;
+        // Multiplied by 0.4 so even at slider=1 it remains a reference,
+        // not a dominant visual element. 0.4 alpha is the max.
+        this.refGrid.material.opacity = v * 0.4;
+        this.refGrid.visible = v > 0.001;
+        // Theme-aware color — cornflower in classic, amber in synthesist.
+        const theme = window.S?.theme || 'classic';
+        const color = (theme === 'synthesist') ? 0xffaa55 : 0x50dcff;
+        this.refGrid.material.color.setHex(color);
     }
 
     setupCamera() {
-        this.camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 5000);
-        this.camera.position.set(0, 0, 300);
+        // Far plane raised to 1,000,000 (from the previous 5000) so users
+        // who zoom way out — which they can, since orbit-zoom is now
+        // uncapped — don't hit a visible spherical "void" at the far clip.
+        // Depth precision degrades with large near/far ratios, but for a
+        // particle visualizer with no fine geometry this is invisible.
+        this.camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1_000_000);
+        // Default camera position matches the hero coordinate in window.S
+        // — a tight orbit (dist=52) looking at the system from a specific
+        // angle that frames the default-parameter view well. Saved camera
+        // state in localStorage (loaded below) overrides this for return
+        // users; first-launch users land at this curated view.
+        this.camera.position.set(-11, 32, -16);
 
         this.cam = {
-            quat: new THREE.Quaternion(),
-            dist: 300,
-            distTarget: 300,
+            quat: new THREE.Quaternion(-0.9466, -0.2728, 0.1182, -0.1251),
+            dist: 52,
+            distTarget: 52,
             target: new THREE.Vector3(),
-            pos: new THREE.Vector3(0, 0, 300),
+            pos: new THREE.Vector3(-11, 32, -16),
             yaw: 0,
             pitch: 0,
             down: false,
@@ -2403,13 +2446,8 @@ export class Engine {
                 const tangent = normalize(sub(pBuf.element(i2).xyz, pBuf.element(i0).xyz));
                 const norm = normalize(cross(tangent, normalize(sub(U.camPos, pos))));
                 const hw = mul(U.pointSize, 0.5);
-                // Per-cell "trail length" — extends the segment along its
-                // tangent direction. Same `U.trailLen * 0.1` scalar that
-                // computeRibbon uses for Hermite tension, applied here to
-                // segment length so the trail-length slider has a visible
-                // effect on the lattice too. Without this, the lattice was
-                // unresponsive to the slider (slider only touched ribbon
-                // tension), which the user perceived as a bug.
+                // Trail length scalar — extends segment along tangent so
+                // the slider visibly affects the lattice (not just ribbons).
                 const segScale = mul(U.trailLen, 0.1);
                 const aOffset = mul(tangent, mul(hw, segScale));
                 outPos.element(mul(i, uint(2))).assign(vec4(add(add(pos, mul(norm, hw)), aOffset), 1.0));
@@ -2526,7 +2564,9 @@ export class Engine {
                     cam.orbitZoomSpeed = Math.max(0.1, Math.min(10, cam.orbitZoomSpeed + delta));
                 } else {
                     const zoomFactor = 1.0 + (e.deltaY > 0 ? 0.08 : -0.08);
-                    cam.distTarget = Math.max(5, Math.min(5000, cam.distTarget * zoomFactor));
+                    // Uncapped zoom-out — see orbit keyboard handler above.
+                    // Floor kept at 1; ceiling removed.
+                    cam.distTarget = Math.max(1, cam.distTarget * zoomFactor);
                 }
             } else {
                 const delta = e.deltaY > 0 ? -0.1 : 0.1;
@@ -2537,15 +2577,8 @@ export class Engine {
         canvas.addEventListener('mousedown', e => { if (e.button === 1) e.preventDefault(); });
 
         window.addEventListener('keydown', e => {
-            // Skip keys destined for any text-input surface. Three categories:
-            //   1. <input> / <textarea>  — native form fields
-            //   2. contenteditable="true" — our editable .val spans on
-            //      every slider (added in the click-to-edit feature). If
-            //      we don't guard against these, arrow keys both move the
-            //      caret AND rotate the camera, which is jarring.
-            //   3. isContentEditable also catches inheritance cases (e.g.
-            //      a contenteditable ancestor) which a plain attribute
-            //      check would miss.
+            // Skip keys destined for any text-input surface (inputs,
+            // textareas, contenteditable .val spans on sliders).
             const t = e.target;
             if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
             keys[e.code] = true;
@@ -2591,18 +2624,29 @@ export class Engine {
         if (keys['ControlLeft'] || keys['ControlRight'] || keys['MetaLeft'] || keys['MetaRight']) return;
 
         if (window.S.moveMode === 'orbit') {
+            // Zoom: uncapped on both ends. Previously had Math.max(5, ...)
+            // floor and Math.min(5000, ...) ceiling. The ceiling created a
+            // hard stop that prevented seeing very large scales; the floor
+            // was a safety net against zooming through the origin which
+            // would invert the view. Floor kept at 1 (effectively still no
+            // limit for the user). Ceiling removed entirely.
             if (keys['KeyW']) {
-                cam.distTarget = Math.max(5, cam.distTarget - cam.distTarget * 0.01 * cam.orbitZoomSpeed);
+                cam.distTarget = Math.max(1, cam.distTarget - cam.distTarget * 0.01 * cam.orbitZoomSpeed);
             }
             if (keys['KeyS']) {
-                cam.distTarget = Math.min(5000, cam.distTarget + cam.distTarget * 0.01 * cam.orbitZoomSpeed);
+                cam.distTarget = cam.distTarget + cam.distTarget * 0.01 * cam.orbitZoomSpeed;
             }
-            
+
+            // Rotation inputs: Arrows + A/D for horizontal. A/D matches WASD
+            // muscle memory while leaving W/S free for zoom (their existing
+            // role in orbit mode). No W/S for vertical rotation since those
+            // would conflict with zoom; arrow keys are the unambiguous
+            // vertical rotation path.
             let oDx = 0, oDy = 0;
-            if (keys['ArrowLeft']) oDx = -2;
-            if (keys['ArrowRight']) oDx = 2;
-            if (keys['ArrowUp']) oDy = -2;
-            if (keys['ArrowDown']) oDy = 2;
+            if (keys['ArrowLeft']  || keys['KeyA']) oDx -= 2;
+            if (keys['ArrowRight'] || keys['KeyD']) oDx += 2;
+            if (keys['ArrowUp'])   oDy -= 2;
+            if (keys['ArrowDown']) oDy += 2;
             if (oDx !== 0 || oDy !== 0) {
                 const angle = Math.sqrt(oDx * oDx + oDy * oDy) * 0.015;
                 const axis = new THREE.Vector3(oDy, oDx, 0).normalize();
@@ -2615,25 +2659,10 @@ export class Engine {
             const forward = new THREE.Vector3(0, 0, cam.dist);
             forward.applyQuaternion(cam.quat);
             this.camera.position.copy(forward);
-            this.camera.lookAt(cam.target);
-        } else if (window.S.moveMode === 'hybrid') {
-            const speed = cam.dist * 0.01 * cam.flyMoveSpeed;
-            if (keys['KeyW']) cam.distTarget = Math.max(5, cam.distTarget - speed);
-            if (keys['KeyS']) cam.distTarget = Math.min(5000, cam.distTarget + speed);
-            if (keys['KeyA']) cam.yaw -= 0.02 * cam.flyMoveSpeed;
-            if (keys['KeyD']) cam.yaw += 0.02 * cam.flyMoveSpeed;
-            if (keys['ArrowLeft']) cam.yaw += 0.02;
-            if (keys['ArrowRight']) cam.yaw -= 0.02;
-            if (keys['ArrowUp']) cam.pitch += 0.02;
-            if (keys['ArrowDown']) cam.pitch -= 0.02;
-            
-            cam.dist += (cam.distTarget - cam.dist) * 0.12;
-            cam.quat.setFromEuler(new THREE.Euler(cam.pitch, cam.yaw, 0, 'YXZ'));
-            const fwdH = new THREE.Vector3(0, 0, cam.dist);
-            fwdH.applyQuaternion(cam.quat);
-            this.camera.position.copy(fwdH);
-            this.camera.lookAt(cam.target);
+            // Direct quaternion (not lookAt) — gives true 6DOF, no pole-snap.
+            this.camera.quaternion.copy(cam.quat);
         } else {
+            // Fly mode (hybrid was removed — never user-exposed).
             const baseSpeed = Math.max(1, cam.pos.length() * 0.005);
             const speed = baseSpeed * cam.flyMoveSpeed;
             const fwd = new THREE.Vector3(0, 0, -1).applyEuler(new THREE.Euler(cam.pitch, cam.yaw, 0, 'YXZ'));
@@ -2746,6 +2775,7 @@ export class Engine {
     async render() {
         this.updateUniforms();
         this.updateNavigationArrow();
+        this.updateReferenceGrid();
 
         if (window.S.tempo > 0.0) {
             try {
@@ -2758,21 +2788,11 @@ export class Engine {
         }
 
         const xf = window.S._xfade;
-        // _xfade values are authoritative whenever present. Their lifecycle:
-        //   • set by tour transitions (multi-key, runs during window.transition)
-        //   • set by fadeVisibilityKey on user toggles (per-key, short fade)
-        //   • cleared on stopTour, fade completion, and transition end
-        // The previous `transitioning` gate is gone — those cleanup paths are
-        // now the single source of truth that prevents stale xfade values
-        // from pinning visibility (the original Quanta bug class). With this
-        // change, user toggles of Quanta/Strings/Lattice get the same smooth
-        // fade that tour transitions do.
-        //
-        // _xfadeEnv is a SEPARATE channel for the color-mode V-envelope dip.
-        // It's multiplied onto each layer's alpha so a color-mode change
-        // dips everything visible to ~0 at midpoint without disturbing any
-        // in-flight per-layer fades. Defaults to 1 when no envelope is
-        // active. See fadeColorModeChange() for the writer side.
+        // _xfade is authoritative when present. Set by tour transitions
+        // (multi-key) and fadeVisibilityKey (per-key); cleared on stopTour,
+        // fade completion, and transition end.
+        // _xfadeEnv is a separate channel for the colorMode V-envelope dip,
+        // multiplied onto each layer's alpha. See fadeColorModeChange().
         const envMul = (window.S._xfadeEnv !== undefined) ? window.S._xfadeEnv : 1;
 
         if (this.mesh) {
@@ -2797,20 +2817,15 @@ export class Engine {
         }
 
         if (this.ribbonMesh) {
-            // Strings: read xfade if present, else hard state. Compute is
-            // gated on the boolean (still runs/doesn't run as before), so
-            // we only fade the material.opacity here — geometry generation
-            // never sees a half-faded state. Same lifecycle for tessRibbons
-            // below. Color-mode envelope multiplies onto this alpha too.
+            // Strings fade: read xfade if present, else hard state. Compute
+            // runs based on the boolean; only material.opacity fades here.
+            // Color-mode envelope multiplies onto this alpha.
             const showR = !!window.S.showRibbons;
             const xfR = (xf && xf.ribbons !== undefined) ? xf.ribbons : null;
             const baseAlpha = (xfR !== null) ? xfR : (showR ? 1 : 0);
             const alpha = baseAlpha * envMul;
             const shouldRender = alpha > 0.001;
-            // Compute decision uses the BASE alpha (pre-envelope) so the
-            // envelope dip doesn't pause geometry updates mid-flip. If
-            // ribbons are "logically on", compute runs through the dip and
-            // we just fade the material.
+            // Compute uses BASE alpha so envelope dip doesn't pause geometry mid-flip.
             const baseOn = baseAlpha > 0.001;
             this.ribbonMesh.visible = shouldRender;
             if (baseOn && this.computeRibbonNode) {
@@ -2892,15 +2907,15 @@ export function initRadialUI() {
       { key: 'showRibbons', label: 'Strings', type: 'toggle' },
       { key: 'tessRibbons', label: 'Lattice', type: 'toggle' }, null,
       { key: 'trailLen', label: 'Trail Length', min: 3, max: 30, step: 1, sensitivity: 0.15, format: value => Math.round(value).toString() }, null, 
-      { key: 'sat', label: 'Saturation', min: 0, max: 1, step: 0.01, sensitivity: 0.005, format: value => value.toFixed(2) },
+      { key: 'sat', label: 'Color Saturation', min: 0, max: 1, step: 0.01, sensitivity: 0.005, format: value => value.toFixed(2) },
       { key: 'colorMode', label: 'Color Mode', type: 'enum', options: [0, 1, 2, 3], labels: ['Base', 'Size', 'Velocity', 'Density'], sensitivity: 0.02 },
-      { key: 'hue', label: 'Color Range', min: 0, max: 1, step: 0.01, sensitivity: 0.005, format: value => value.toFixed(2) },
+      { key: 'hue', label: 'Color Spectrum Range', min: 0, max: 1, step: 0.01, sensitivity: 0.005, format: value => value.toFixed(2) },
       { key: 'newWaypoint', label: 'New Waypoint', type: 'trigger', action: () => window.captureWaypoint() },
       { key: 'startTour', label: 'Start Tour', type: 'trigger', action: () => { 
           if(window.tour && window.tour.active) { if(window.stopTour) window.stopTour(); }
           else { if(window.startTour) window.startTour(); }
       } },
-      { key: 'opacity', label: 'Opacity', min: 0, max: 1, step: 0.01, sensitivity: 0.005, format: value => value.toFixed(2) },
+      { key: 'opacity', label: 'Particle Opacity', min: 0, max: 1, step: 0.01, sensitivity: 0.005, format: value => value.toFixed(2) },
       { key: 'showParticles', label: 'Quanta', type: 'toggle' }
     ];
 
@@ -3045,7 +3060,7 @@ export function initRadialUI() {
                     this.originPoint = { x: data.originX || 0, y: data.originY || 0 };
                     
                     if (this.isLocked) {
-                        this.updateLockVisuals();
+                        this.updateLockOptics();
                     }
                     
                     if (data.isOpen) {
@@ -3060,7 +3075,7 @@ export function initRadialUI() {
             } catch (e) { console.error("Radial load error", e); }
         }
 
-        updateLockVisuals() {
+        updateLockOptics() {
             const closedPath = "M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z";
             const openPath = "M12 17c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm6-9h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6h1.9c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm0 12H6V10h12v10z";
             this.lockPath.setAttribute('d', this.isLocked ? closedPath : openPath);
@@ -3112,12 +3127,20 @@ export function initRadialUI() {
                     window.S[control.key] = resolved;
                 }
             } else {
-                window.S[control.key] = this.clamp(this.quantize(value, control.step), control.min, control.max); 
-                
+                // Radial scrub past max matches the panel slider's scrub
+                // behavior — bar pins visually at 100% but the value can
+                // exceed control.max. Floor is preserved because most
+                // params have meaningful zero/near-zero. freeEnergy
+                // retains its ceiling because it sizes a GPU buffer; for
+                // every other key the high side is open.
+                const q = this.quantize(value, control.step);
+                const hi = (control.key === 'freeEnergy') ? control.max : Infinity;
+                window.S[control.key] = Math.max(control.min, Math.min(hi, q));
+
                 if (control.key === 'uiZoom') {
                     document.documentElement.style.setProperty('--ui-zoom', window.S[control.key]);
                 }
-                
+
                 if (window.sliderSync && window.sliderSync[control.key]) {
                     window.sliderSync[control.key](window.S[control.key]);
                 }
@@ -3272,7 +3295,7 @@ export function initRadialUI() {
             // Only reset lock if it was CLOSED (fresh manual open)
             if (!this.isOpen && !this.isRestoring) {
                 this.isLocked = false;
-                this.updateLockVisuals();
+                this.updateLockOptics();
             }
             
             clearTimeout(this.closeTimer);
@@ -3763,7 +3786,11 @@ export function initRadialUI() {
                 this.readoutMeta.style.display = 'block';
                 this.readoutScope.style.display = 'block';
                 this.readoutToggleUI.style.display = 'none';
-                
+
+                // TODO: click-to-edit on the readout value. Needs a state
+                // machine on RadialInstance to gate edit mode (clean click,
+                // no drag), suppress global pointer capture during edit,
+                // and an escape path. Non-trivial; deferred.
                 this.readoutValue.textContent = control.format(window.S[control.key]);
                 const sign = delta >= 0 ? '+' : '-';
                 const deltaText = `${sign}${control.format(Math.abs(delta))}`;
@@ -4287,6 +4314,11 @@ export function setupUI(engine) {
 
                 if (targetEl.id === 'dock') {
                     targetEl.style.margin = '0';
+                    // Logo tracks the dock live during drag — without this,
+                    // fast drags left the logo behind because applyDocked()
+                    // only ran on pointerup. Now the logo follows as the
+                    // dock moves.
+                    if (window.applyDockedLogo) window.applyDockedLogo();
                 }
                 
                 // Live bounds clamping. HUD elements (dock, hud-title) get clamped so their full body stays visible. Panels keep at least a corner.
@@ -4326,6 +4358,9 @@ export function setupUI(engine) {
 
     // Initialize Dock BEFORE initDrag so it receives the drag listeners
     initDock();
+    // Logo behavior (snap-to-dock, fade-on-distance) is independent of the
+    // dock's button layout but anchored to it, so init here right after.
+    initLogo();
     
     // Initialize defaults before building UI
     if (typeof window.S.panelOpacity !== 'number') window.S.panelOpacity = 0.55;
@@ -4387,6 +4422,95 @@ function initDock() {
     navToggle.appendChild(navFly);
     dock.appendChild(navToggle);
 
+    // ─── Hover-revealed speed sliders ─────────────────────────────────────
+    // Vertical slider pops up above each nav button on hover (orbit →
+    // orbitZoomSpeed, fly → flyMoveSpeed). Only revealed when its mode is
+    // active. 400ms grace on hide so the user can travel from button to
+    // slider without it disappearing.
+    const makeSpeedSlider = (label, getCurrent, setCurrent, min, max, step) => {
+        const popup = document.createElement('div');
+        popup.className = 'dock-speed-popup';
+        const lbl = document.createElement('div');
+        lbl.className = 'dock-speed-label';
+        lbl.textContent = label;
+        popup.appendChild(lbl);
+        const valEl = document.createElement('div');
+        valEl.className = 'dock-speed-val';
+        valEl.textContent = getCurrent().toFixed(2);
+        popup.appendChild(valEl);
+        const inp = document.createElement('input');
+        inp.type = 'range';
+        inp.className = 'dock-speed-range';
+        inp.min = min; inp.max = max; inp.step = step;
+        inp.value = getCurrent();
+        // Vertical orientation. CSS rotation handles the visual; we read
+        // input.value as numeric regardless of orientation.
+        inp.addEventListener('input', () => {
+            const v = parseFloat(inp.value);
+            setCurrent(v);
+            valEl.textContent = v.toFixed(2);
+        });
+        popup.appendChild(inp);
+        return popup;
+    };
+
+    const orbitSpeedPopup = makeSpeedSlider(
+        'W/S\nzoom',
+        () => window.engine?.cam?.orbitZoomSpeed ?? 1.0,
+        v => { if (window.engine?.cam) window.engine.cam.orbitZoomSpeed = v; },
+        0.1, 10, 0.1
+    );
+    const flySpeedPopup = makeSpeedSlider(
+        'fly\nspeed',
+        () => window.engine?.cam?.flyMoveSpeed ?? 1.0,
+        v => { if (window.engine?.cam) window.engine.cam.flyMoveSpeed = v; },
+        0.05, 20, 0.05
+    );
+
+    // Append popups to the nav buttons so they position relative to each
+    // button. CSS positions them absolutely above with bottom:100%.
+    navOrbit.style.position = 'relative';
+    navFly.style.position = 'relative';
+    navOrbit.appendChild(orbitSpeedPopup);
+    navFly.appendChild(flySpeedPopup);
+
+    // Show/hide logic. Sub-millisecond function; called on every
+    // pointerenter/pointerleave on the button + popup.
+    const wireSpeedPopup = (btn, popup, requiredMode) => {
+        let hideTimer = null;
+        const show = () => {
+            if (window.S.moveMode !== requiredMode) return;
+            clearTimeout(hideTimer);
+            popup.classList.add('visible');
+        };
+        const hideSoon = () => {
+            clearTimeout(hideTimer);
+            // 400ms grace lets the user transit from button to popup
+            // without the popup disappearing en route.
+            hideTimer = setTimeout(() => popup.classList.remove('visible'), 400);
+        };
+        btn.addEventListener('pointerenter', show);
+        btn.addEventListener('pointerleave', hideSoon);
+        popup.addEventListener('pointerenter', () => { clearTimeout(hideTimer); });
+        popup.addEventListener('pointerleave', hideSoon);
+    };
+    wireSpeedPopup(navOrbit, orbitSpeedPopup, 'orbit');
+    wireSpeedPopup(navFly, flySpeedPopup, 'fly');
+
+    // Screenshot capture button — one-shot full-res PNG download.
+    // Honors Include → Background and Include → Scanlines from System.
+    const captureBtn = document.createElement('button');
+    captureBtn.className = 'dock-capture-btn';
+    captureBtn.title = 'Capture screenshot (be sure to reinitialize for accuracy)';
+    // SVG camera glyph rather than Unicode "📷" which renders inconsistently.
+    captureBtn.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M9 3L7.17 5H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2h-3.17L15 3H9zm3 15c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5z"/><circle cx="12" cy="13" r="3"/></svg>';
+    captureBtn.addEventListener('click', () => {
+        if (window.engine && typeof downloadFullResScreenshot === 'function') {
+            downloadFullResScreenshot(window.engine);
+        }
+    });
+    dock.appendChild(captureBtn);
+
     const syncNavToggle = () => {
         const mode = window.S.moveMode || 'orbit';
         navOrbit.dataset.active = (mode === 'orbit') ? 'true' : 'false';
@@ -4421,9 +4545,9 @@ function initDock() {
 
     const dockDefs = [
         { id: 'panelParams', label: 'Params' },
-        { id: 'panelSettings', label: 'Visuals' },
+        { id: 'panelSettings', label: 'Optics' },
         { id: 'panelAtlas', label: 'Atlas' },
-        { id: 'panelControls', label: 'Info' },
+        { id: 'panelControls', label: 'Controls' },
         { id: 'panelConfig', label: 'Config' },
         { id: 'panelEntropy', label: 'Entropy', isFps: true }
     ];
@@ -4481,6 +4605,168 @@ function initDock() {
     window.renderDock();
 }
 
+// ─── Logo behavior ─────────────────────────────────────────────────────────
+// Snap to dock (tracks dock position), drag to detach, snap-back on release
+// within radius, mouse-distance fade, click-to-toggle opaque/translucent.
+function initLogo() {
+    const logo = document.getElementById('hud-title');
+    if (!logo) return;
+
+    // Snap target follows the dock. Logo sits above the dock when dock is
+    // in the bottom half of the viewport, below it otherwise. The .dock-below
+    // class flips the connector stroke side accordingly.
+    const GAP = 12;
+    const SNAP_RADIUS = 60;
+
+    const dockRect = () => {
+        const d = document.getElementById('dock');
+        return d ? d.getBoundingClientRect() : null;
+    };
+
+    // Compute where the logo should sit when docked, in screen coordinates.
+    // Returns {x, y, side} where side is 'above' or 'below' relative to dock.
+    const dockedTarget = () => {
+        const dr = dockRect();
+        const lh = logo.offsetHeight || 16;
+        if (!dr) {
+            // Fallback when dock isn't built yet — use viewport bottom
+            // (matches the CSS default of bottom:64px).
+            return {
+                x: window.innerWidth / 2,
+                y: window.innerHeight - 64 - lh / 2,
+                side: 'above'
+            };
+        }
+        const dockCY = dr.top + dr.height / 2;
+        const above = dockCY > window.innerHeight / 2; // dock is in lower half → logo goes above
+        const y = above
+            ? dr.top - GAP - lh / 2
+            : dr.bottom + GAP + lh / 2;
+        return { x: dr.left + dr.width / 2, y, side: above ? 'above' : 'below' };
+    };
+
+    const applyDocked = () => {
+        const t = dockedTarget();
+        const lw = logo.offsetWidth || 100;
+        const lh = logo.offsetHeight || 16;
+        logo.style.left = (t.x - lw / 2) + 'px';
+        logo.style.top  = (t.y - lh / 2) + 'px';
+        // Clear drag-system overrides so our left/top win.
+        logo.style.right = '';
+        logo.style.bottom = '';
+        logo.style.transform = '';
+        logo.style.margin = '';
+        logo.classList.toggle('dock-below', t.side === 'below');
+    };
+    // Exposed for the dock-drag handler — keeps logo glued during fast drags.
+    window.applyDockedLogo = () => {
+        if (logo.classList.contains('docked')) applyDocked();
+    };
+
+    // Initial state: if the logo has no inline positioning (i.e. it's
+    // fresh, never dragged, never restored from a saved position), treat
+    // it as docked. Otherwise, check distance from the current dock target
+    // — if close enough, dock it; if far, leave free.
+    const refreshDockedState = () => {
+        const hasInline = !!(logo.style.left || logo.style.top);
+        if (!hasInline) {
+            logo.classList.add('docked');
+            applyDocked();
+            return;
+        }
+        const r = logo.getBoundingClientRect();
+        const cx = r.left + r.width / 2;
+        const cy = r.top + r.height / 2;
+        const target = dockedTarget();
+        const dist = Math.hypot(cx - target.x, cy - target.y);
+        if (dist < SNAP_RADIUS) {
+            logo.classList.add('docked');
+            applyDocked();
+        } else {
+            logo.classList.remove('docked');
+            logo.classList.remove('dock-below');
+        }
+    };
+    refreshDockedState();
+
+    // Re-apply docked position on resize or dock movement.
+    const onLayoutChange = () => {
+        if (logo.classList.contains('docked')) applyDocked();
+    };
+    window.addEventListener('resize', onLayoutChange);
+
+    // Snap-back on pointerup if dropped near the dock-relative target.
+    document.addEventListener('pointerup', () => {
+        if (logo.classList.contains('docked')) {
+            applyDocked();
+            return;
+        }
+        const r = logo.getBoundingClientRect();
+        const cx = r.left + r.width / 2;
+        const cy = r.top + r.height / 2;
+        const target = dockedTarget();
+        const dist = Math.hypot(cx - target.x, cy - target.y);
+        if (dist < SNAP_RADIUS) {
+            logo.classList.add('docked');
+            applyDocked();
+            if (window.savePanelPos) window.savePanelPos();
+        }
+    });
+
+    // Live snap-class toggle during drag, for connector-stroke feedback.
+    // Drag handler owns left/top; we only flip the .docked class.
+    document.addEventListener('pointermove', (e) => {
+        const r = logo.getBoundingClientRect();
+        const cx = r.left + r.width / 2;
+        const cy = r.top + r.height / 2;
+        const target = dockedTarget();
+        const dist = Math.hypot(cx - target.x, cy - target.y);
+        const wasDocked = logo.classList.contains('docked');
+        const nearTarget = dist < SNAP_RADIUS;
+        // Only flip while a user-driven drag is in progress.
+        if (!logo.style.left && !logo.style.top) return;
+        if (nearTarget !== wasDocked) {
+            logo.classList.toggle('docked', nearTarget);
+            if (nearTarget) {
+                logo.classList.toggle('dock-below', target.side === 'below');
+            } else {
+                logo.classList.remove('dock-below');
+            }
+        }
+    });
+
+    // Mouse-distance fade — 25% opacity when cursor > 150px from center.
+    const FADE_RADIUS = 150;
+    document.addEventListener('pointermove', (e) => {
+        const r = logo.getBoundingClientRect();
+        const cx = r.left + r.width / 2;
+        const cy = r.top + r.height / 2;
+        const dist = Math.hypot(e.clientX - cx, e.clientY - cy);
+        logo.classList.toggle('distant', dist > FADE_RADIUS);
+    });
+
+    // Click toggles 'opaque' (hides with UI on Tab) ↔ 'translucent' (persists
+    // through Tab as ambient UI). Drag distinguished by 4px movement threshold.
+    logo.dataset.mode = logo.dataset.mode || 'opaque';
+    let downX = 0, downY = 0, moved = false;
+    logo.addEventListener('pointerdown', (e) => {
+        downX = e.clientX; downY = e.clientY; moved = false;
+    });
+    document.addEventListener('pointermove', (e) => {
+        if (Math.hypot(e.clientX - downX, e.clientY - downY) > 4) moved = true;
+    });
+    logo.addEventListener('click', (e) => {
+        if (moved) return;
+        logo.dataset.mode = (logo.dataset.mode === 'opaque') ? 'translucent' : 'opaque';
+        try { localStorage.setItem('ss_logo_mode', logo.dataset.mode); } catch (e) {}
+    });
+    try {
+        const saved = localStorage.getItem('ss_logo_mode');
+        if (saved === 'opaque' || saved === 'translucent') logo.dataset.mode = saved;
+    } catch (e) {}
+}
+window.initLogo = initLogo;
+
 function makeSlider(p, label, subhead, ll, lr, key, min, max, step, cb) {
     // Cache range so the modulation pipeline can compute proper amplitude and clamp values back into bounds.
     window._paramRanges = window._paramRanges || {};
@@ -4520,17 +4806,11 @@ function makeSlider(p, label, subhead, ll, lr, key, min, max, step, cb) {
     const valSpan = d.querySelector('.val');
     sliderSync[key] = (val) => {
         inp.value = val;
-        // Bar visualization clamped to 0..100%. Values can legally exceed
-        // the slider range (typed entry and drag-scrub both allow this),
-        // but the bar is a fixed-width display so we pin it at the edges
-        // rather than rendering negative widths or overflowing past the
-        // container.
+        // Bar pins at 0/100% — values can exceed the slider range via
+        // typed entry or drag-scrub; the visualization just clamps.
         const rawPct = ((val - min) / (max - min) * 100);
         d.querySelector('i').style.setProperty('--v', Math.max(0, Math.min(100, rawPct)) + '%');
-        // Only update the span text when the span doesn't currently have
-        // focus (i.e. the user isn't actively typing into it). Otherwise
-        // a stray sliderSync from modulation or programmatic update would
-        // overwrite their in-progress edit.
+        // Don't overwrite an in-progress edit.
         if (document.activeElement !== valSpan) {
             valSpan.textContent = fmtVal(val);
         }
@@ -4540,9 +4820,7 @@ function makeSlider(p, label, subhead, ll, lr, key, min, max, step, cb) {
     const updateVal = (val, isProgrammatic = false) => {
         window.S[key] = parseFloat(val);
         sliderSync[key](window.S[key]);
-        // Only cancel an active tour if the user is changing something the
-        // tour is actually animating. Cosmetic sliders (panel opacity,
-        // scanlines, UI zoom, button opacity) should leave the tour alone.
+        // Tour only cancels on changes to params it animates.
         if (!isProgrammatic && window.tour && window.tour.active && TOUR_STOPPING_KEYS.has(key)) window.stopTour();
         if (window.refreshRadialUI) window.refreshRadialUI();
         try { localStorage.setItem('ss_state', JSON.stringify(window.S)) } catch (e) { }
@@ -4550,10 +4828,8 @@ function makeSlider(p, label, subhead, ll, lr, key, min, max, step, cb) {
 
     inp.addEventListener('input', e => { if (e.isTrusted) updateVal(e.target.value, false) });
     d.addEventListener('wheel', e => {
-        // Wheel-scrub respects the slider's min/max because the wheel is a
-        // bounded gesture (no clear visual signal you've gone "past" the
-        // range). Typed entry and drag-scrub both allow out-of-range values
-        // since both have stronger user intent signals — see below.
+        // Wheel-scrub is range-clamped (bounded gesture, no "past edge" signal).
+        // Typed entry and drag-scrub allow out-of-range — stronger intent.
         e.preventDefault();
         const stepDist = (step || (max - min) / 100) * 5;
         const newVal = Math.max(min, Math.min(max, window.S[key] - Math.sign(e.deltaY) * stepDist));
@@ -4562,16 +4838,10 @@ function makeSlider(p, label, subhead, ll, lr, key, min, max, step, cb) {
     }, { passive: false });
 
     // ─── Editable / scrubbable value field ─────────────────────────────────
-    // The .val span supports two interactions: click-to-edit (focus, type,
-    // Enter/blur to commit) and drag-to-scrub (Unreal-style horizontal
-    // drag changes the value continuously). Discrimination is via a 4px
-    // movement threshold during pointerdown — small movements are clicks,
-    // larger ones are drags. Both interactions allow values outside the
-    // slider's min/max; the bar pins at 0%/100% as a visual cue without
-    // blocking the underlying value from being stored. freeEnergy is
-    // clamped on reload via _STATE_CLAMPS (the only param where an absurd
-    // value has real-world cost — it sizes a GPU buffer), so even an
-    // out-of-range typed value gets sane'd on next session.
+    // .val span: click-to-edit (focus, type, Enter/blur commits) OR drag-to-
+    // scrub (4px threshold distinguishes click from drag). Both allow out-
+    // of-range values; bar pins at 0/100% visually. freeEnergy is clamped
+    // on reload via _STATE_CLAMPS (sizes a GPU buffer).
     const DRAG_THRESHOLD = 4;       // px before pointerdown is considered a drag
     const DRAG_PER_PX = step * 0.5; // value-per-pixel of horizontal drag
     let _ptrStart = null;
@@ -4611,13 +4881,11 @@ function makeSlider(p, label, subhead, ll, lr, key, min, max, step, cb) {
             document.body.style.cursor = 'ew-resize';
             // Block text selection during drag.
             document.body.style.userSelect = 'none';
-            // Capture so we get the pointerup even if the pointer ends
-            // over a different element.
+            // Capture so pointerup fires even off-element.
             try { valSpan.setPointerCapture(_ptrStart.pointerId); _ptrStart.captured = true; } catch (err) {}
         }
         const newVal = _ptrStart.startVal + dx * DRAG_PER_PX;
-        // Drag is uncapped — no Math.min/max against the slider range.
-        // The bar pins visually via the clamp in sliderSync.
+        // Uncapped — bar pins via sliderSync clamp.
         updateVal(newVal, false);
     };
 
@@ -4628,7 +4896,6 @@ function makeSlider(p, label, subhead, ll, lr, key, min, max, step, cb) {
             try { valSpan.releasePointerCapture(_ptrStart.pointerId); } catch (err) {}
         }
         _ptrStart = null;
-        // Detach the document-scoped listeners that pointerdown installed.
         document.removeEventListener('pointermove', onPointerMove);
         document.removeEventListener('pointerup', onPointerUp);
         document.removeEventListener('pointercancel', onPointerUp);
@@ -4636,14 +4903,10 @@ function makeSlider(p, label, subhead, ll, lr, key, min, max, step, cb) {
         document.body.style.cursor = '';
         document.body.style.userSelect = '';
 
-        // If the pointer never crossed the threshold, treat it as a click
-        // → enter edit mode (focus the span as contenteditable, select all
-        // for easy replacement).
+        // No threshold crossed → click → enter edit mode (select all).
         if (!wasDragging) {
             valSpan.contentEditable = 'true';
             valSpan.focus();
-            // Select all text so typing replaces the value rather than
-            // appending to it. Standard scrubber numeric field pattern.
             const range = document.createRange();
             range.selectNodeContents(valSpan);
             const sel = window.getSelection();
@@ -4652,11 +4915,8 @@ function makeSlider(p, label, subhead, ll, lr, key, min, max, step, cb) {
         }
     };
 
-    // Commit on blur or Enter; revert on Escape. The span's textContent
-    // is the source of truth during editing; we parse via Number() (which
-    // tolerates whitespace, scientific notation, etc.) and reject NaN by
-    // restoring the displayed value. Out-of-range values are accepted
-    // verbatim — the user typed them intentionally.
+    // Commit on blur/Enter; revert on Escape. NaN → restore displayed value.
+    // Out-of-range typed values accepted verbatim (intentional).
     let _editStartVal = null;
     valSpan.addEventListener('focus', () => {
         _editStartVal = Number(window.S[key]);
@@ -4699,6 +4959,50 @@ function makeSlider(p, label, subhead, ll, lr, key, min, max, step, cb) {
     return d;
 }
 
+// makeButtonRow — multi-select pill buttons (any combination on/off).
+// Contrast with makeGroupToggles, which is mutually-exclusive tabs.
+// items: { label, key, cb? }. matchVal NOT supported here — pure boolean.
+function makeButtonRow(p, items) {
+    const tb = document.createElement('div');
+    tb.className = 'button-row';
+
+    items.forEach((itm) => {
+        const btn = document.createElement('div');
+        btn.className = 'button-row-btn';
+
+        itm.update = () => {
+            const active = !!window.S[itm.key];
+            btn.dataset.active = active ? '1' : '0';
+        };
+        itm.update();
+
+        window._toggleUpdaters = window._toggleUpdaters || {};
+        if (!window._toggleUpdaters[itm.key]) window._toggleUpdaters[itm.key] = new Set();
+        window._toggleUpdaters[itm.key].add(itm.update);
+
+        btn.textContent = itm.label;
+        btn.addEventListener('click', () => {
+            window.S[itm.key] = !window.S[itm.key];
+            try { localStorage.setItem('ss_state', JSON.stringify(window.S)); } catch (e) {}
+            // Fire all updaters registered for this key — same dispatch
+            // pattern as makeGroupToggles so dependent UI (e.g. Trail
+            // Length's .disabled state, Save button's enable, BG/Scanlines
+            // conditional disable) reacts to the toggle uniformly.
+            const upds = window._toggleUpdaters[itm.key];
+            if (upds) upds.forEach(fn => { try { fn(); } catch (e) {} });
+            if (itm.cb) itm.cb(window.S[itm.key]);
+            // Visual effects that always need to react to state changes
+            // matching the makeGroupToggles handler's responsibilities.
+            if (window.engine) window.engine.updateUniforms();
+        });
+
+        tb.appendChild(btn);
+    });
+
+    p.appendChild(tb);
+    return tb;
+}
+
 function makeGroupToggles(p, items) {
     const tb = document.createElement('div');
     tb.className = 'group-toggles';
@@ -4708,26 +5012,16 @@ function makeGroupToggles(p, items) {
         btn.className = 'group-toggle-btn';
 
         itm.update = () => {
-            // Read the BOOLEAN (user intent), not the in-flight fade alpha.
-            // The fade is purely visual on the canvas; the button must
-            // reflect what the user just asked for, immediately.
-            //
-            // ColorMode special case: fadeColorModeChange defers the actual
-            // window.S.colorMode assignment until the V-envelope trough.
-            // If we read window.S.colorMode immediately on click, the button
-            // shows the OLD mode highlighted until midpoint — which the user
-            // perceives as "tab 1 click does nothing, tab 2 click activates
-            // tab 1, etc." (off-by-one). Reading the pending target during
-            // the fade resolves the click-to-highlight to instant feedback.
+            // Read user-intent boolean, not in-flight fade alpha.
+            // ColorMode: fade defers the S.colorMode write until midpoint,
+            // so read the pending target during fade for instant button
+            // feedback instead of off-by-one click highlights.
             let currentVal = window.S[itm.key];
             if (itm.key === 'colorMode' && window._xfadeColorModeTarget != null) {
                 currentVal = window._xfadeColorModeTarget;
             }
-            // Paired-visibility group (Quanta shape tabs): the button is
-            // "active" only when BOTH the section visibility (e.g.
-            // showParticles) is true AND this tab's matchVal is the
-            // currently-selected value. When visibilityKey is off, no tab
-            // in the group is highlighted — this is the "section off" state.
+            // Paired-visibility (Quanta): active iff both visibilityKey AND
+            // matchVal match. visibilityKey off → no tab active.
             let active;
             if (itm.visibilityKey) {
                 active = !!window.S[itm.visibilityKey] && currentVal === itm.matchVal;
@@ -4743,9 +5037,7 @@ function makeGroupToggles(p, items) {
         window._toggleUpdaters = window._toggleUpdaters || {};
         if (!window._toggleUpdaters[itm.key]) window._toggleUpdaters[itm.key] = new Set();
         window._toggleUpdaters[itm.key].add(itm.update);
-        // Also register under visibilityKey so the tab re-renders when the
-        // section is turned on/off externally (e.g. via the radial menu's
-        // showParticles toggle, or a waypoint load).
+        // Register under visibilityKey too — re-render when section toggled externally.
         if (itm.visibilityKey) {
             if (!window._toggleUpdaters[itm.visibilityKey]) window._toggleUpdaters[itm.visibilityKey] = new Set();
             window._toggleUpdaters[itm.visibilityKey].add(itm.update);
@@ -4753,19 +5045,15 @@ function makeGroupToggles(p, items) {
 
         btn.textContent = itm.label;
         btn.addEventListener('click', () => {
-            // Paired-visibility group (Quanta shape tabs): clicking an
-            // active tab turns the whole section OFF; clicking an inactive
-            // tab switches to that matchVal and turns the section ON if
-            // needed. "No tab active" is a valid section-off state. Shape
-            // is preserved when the section is turned off so re-enabling
-            // restores the last-selected tab.
+            // Paired-visibility (Quanta): clicking active tab turns section
+            // OFF; clicking inactive tab switches matchVal + turns section ON.
+            // Shape preserved across off/on cycles.
             if (itm.visibilityKey) {
                 const wasVisible = !!window.S[itm.visibilityKey];
                 const wasMatching = window.S[itm.key] === itm.matchVal;
                 const wasActive = wasVisible && wasMatching;
 
-                // Stop tour if either key is in its watchlist. Done before
-                // any fade kick-off so stopTour's cleanup doesn't wipe it.
+                // Stop tour before any fade kicks off (so stopTour's cleanup doesn't wipe it).
                 if (tour && tour.active && (
                     TOUR_STOPPING_KEYS.has(itm.key) ||
                     TOUR_STOPPING_KEYS.has(itm.visibilityKey)
@@ -4920,16 +5208,37 @@ function makeBtn(p, label, color, cb) {
 // the call site (vs. fire-and-forget makeBtn calls). Identical implementation.
 const makeBtnReturn = makeBtn;
 
-function makeSection(p, labelKey) {
+// makeSection(parent, labelOrKey, sub?) — section header (white headline +
+// optional brand-colored subhead, no rule). labelOrKey is either an APP_TEXT
+// key or raw display text.
+function makeSection(p, labelKey, sub) {
     const d = document.createElement('div');
     d.className = 'section';
     let text = labelKey;
+    let subText = sub;
     if (window.APP_TEXT && window.APP_TEXT[labelKey]) {
         const val = window.APP_TEXT[labelKey];
-        text = (typeof val === 'object' && val.label) ? val.label : val;
+        if (typeof val === 'object') {
+            text = val.label || labelKey;
+            // Auto-pull subhead from APP_TEXT if not explicitly provided.
+            // Lets translators / theme authors define subheads in one place.
+            if (subText === undefined && val.sub) subText = val.sub;
+        } else {
+            text = val;
+        }
     }
-    d.textContent = text;
+    const hd = document.createElement('span');
+    hd.className = 'section-head';
+    hd.textContent = text;
+    d.appendChild(hd);
+    if (subText) {
+        const sh = document.createElement('span');
+        sh.className = 'section-sub';
+        sh.textContent = subText;
+        d.appendChild(sh);
+    }
     p.appendChild(d);
+    return d;
 }
 
 export function buildUI(engine) {
@@ -4937,7 +5246,7 @@ export function buildUI(engine) {
     if (!pb) return;
 
     // Update Panel Titles from Config
-    const T = window.APP_TEXT || { controls: {}, panels: {}, instructions: {}, quanta: {}, strings: {}, colorMode: {}, moveMode: {} };
+    const T = window.APP_TEXT || { controls: {}, panels: {}, instructions: {}, quanta: {}, trails: {}, colorMode: {}, moveMode: {} };
     if (T.panels) {
         for (const [id, title] of Object.entries(T.panels)) {
             const panel = document.getElementById('panel' + id.charAt(0).toUpperCase() + id.slice(1));
@@ -5001,10 +5310,11 @@ export function buildUI(engine) {
     makeSlider(pb, c.mass?.label || 'Mass', c.mass?.sub ||'inertia', c.mass?.ll ||'light', c.mass?.lr ||'heavy', 'mass', 0.1, 5, .05);
 
     const rd = document.createElement('div');
-    // Flex row whose children equally share the available width. Without
-    // flex:1 on the buttons their auto-width plus margin-right caused the
-    // bar to wrap to two lines for any non-trivial label pair.
-    rd.style.cssText = 'margin-top:12px;display:flex;gap:6px;';
+    // Generous vertical breathing room — these are footer actions on a
+    // panel that gets a lot of vertical scrolling, so they shouldn't feel
+    // crammed against the last slider above or against the panel edge
+    // below. 22px top, 14px bottom gives them deliberate space.
+    rd.style.cssText = 'margin-top:22px;margin-bottom:14px;display:flex;gap:6px;';
     pb.appendChild(rd);
     const styleBottomBtn = (btn) => {
         btn.style.flex = '1';
@@ -5018,7 +5328,10 @@ export function buildUI(engine) {
     // head. Pulses when no homepoint exists to invite first-time setup;
     // clicking with no homepoint set toasts a hint and triggers the
     // +Homepoint glow so users see exactly where to go next.
-    const homepointBtn = makeBtnReturn(rd, 'Homepoint', '#6aaa7a', () => {
+    // Green airplane glyph reinforces the "travel here" affordance, matching
+    // the per-waypoint travel buttons throughout the Atlas. Homepoint IS a
+    // travel target; the icon makes that explicit at a glance.
+    const homepointBtn = makeBtnReturn(rd, 'Homepoint \u2708', '#6aaa7a', () => {
         if (!window.S.homepoint) {
             // First-touch hint flow: toast + trigger +Homepoint glow so the
             // user has a clear path to setting one. Flag persists until they
@@ -5034,10 +5347,8 @@ export function buildUI(engine) {
     if (!window.S.homepoint) {
         homepointBtn.style.animation = 'pulseGreen 1.5s infinite';
     }
-    // Re-initialize: blows away current particle positions/velocities and
-    // restarts the system at the same parameter coordinates. Useful for
-    // seeing the "true" attractor shape without stigmergic momentum from
-    // the previous state.
+    // Re-initialize: blows away particle state, restarts at same coords.
+    // Reveals the true attractor without stigmergic momentum.
     makeBtn(rd, 'Re-initialize', '#5fa8c8', () => {
         if (window.engine && typeof window.engine.reinitializeParticles === 'function') {
             window.engine.reinitializeParticles();
@@ -5046,24 +5357,16 @@ export function buildUI(engine) {
     // Apply equal-share + no-margin to both buttons just created
     Array.from(rd.children).forEach(styleBottomBtn);
 
-    // ─── Visuals ───────────────────────────────────────────────────────────
+    // ─── Optics ───────────────────────────────────────────────────────────
+    // Order: Particle Opacity → Quanta → Trails → Trail Length →
+    // Color Mode → Color Spectrum Range → Color Saturation.
+    // Backdrop sliders live in Config → UI (they affect the UI layer, not
+    // the simulation). Dependent controls (Trail Length) live-update via
+    // _toggleUpdaters; no buildUI rebuilds on toggle.
     const sb = document.getElementById('settingsBody'); sb.innerHTML = '';
 
-    // Visuals panel structure:
-    //   Quanta   — three mutually-exclusive shape tabs that also serve as
-    //              the on/off for the particle layer. Clicking the active
-    //              tab turns the section off ("no tab selected" is a valid
-    //              state). Shape is preserved across off/on cycles via
-    //              window.S.shape, so re-enabling restores the last tab.
-    //   Strings  — two independent toggles (Curved, Lattice). Either,
-    //              both, or neither can be on.
-    //   Trail Length — slider; disabled when both string types are off.
-    //   Color Mode + color sliders below (unchanged).
-    //
-    // No buildUI rebuilds on toggle — dependent controls (Trail Length)
-    // live-update via _toggleUpdaters so the panel stays structurally
-    // stable. Avoiding rebuilds also avoids the in-flight-fade / stale-
-    // button-state class of bugs.
+    // Particle Opacity — first, simplest knob.
+    makeSlider(sb, c.opacity?.label || 'Particle Opacity', c.opacity?.sub ||'', c.opacity?.ll ||'ghost', c.opacity?.lr ||'solid', 'opacity', 0, 1, .05);
 
     const quantaT = T.quanta || { label: 'Quanta', items: ['Circle', 'Square', 'Diamond'] };
     makeSection(sb, 'quanta');
@@ -5073,30 +5376,31 @@ export function buildUI(engine) {
         { label: quantaT.items[2], key: 'shape', matchVal: 'diamond', visibilityKey: 'showParticles' }
     ]);
 
-    const stringsT = T.strings || { label: 'Strings', items: ['Curved', 'Lattice'] };
-    makeSection(sb, 'strings');
-    makeGroupToggles(sb, [
-        { label: stringsT.items[0], key: 'showRibbons' },
-        { label: stringsT.items[1], key: 'tessRibbons' }
+    const trailsT = T.trails || { label: 'Trails', items: ['Strings', 'Lattice'] };
+    makeSection(sb, 'trails');
+    // Trails uses button-row, not tabs: Strings and Lattice are
+    // independent toggles. Either, both, or neither can be on.
+    makeButtonRow(sb, [
+        { label: trailsT.items[0], key: 'showRibbons' },
+        { label: trailsT.items[1], key: 'tessRibbons' }
     ]);
 
-    // Trail Length: dedicated section header + slider wrapper so the disabled
-    // state applies uniformly to header + control. Wrapper carries the
-    // .disabled class which the existing CSS rule fades + locks pointer
-    // events on. Trail Length applies only when at least one string type is
-    // on, otherwise it has nothing to draw against.
-    const trailHdr = document.createElement('div');
-    trailHdr.className = 'section';
-    trailHdr.textContent = (T.controls?.trailLength?.label || 'Trail Length');
-    sb.appendChild(trailHdr);
+    // Trail Length: standard slider, disabled when both trail types are off.
     const trailWrap = document.createElement('div');
+    trailWrap.style.cssText = 'margin-top:10px;';
     sb.appendChild(trailWrap);
-    makeSlider(trailWrap, '', c.trailLength?.sub || '', c.trailLength?.ll || 'short', c.trailLength?.lr || 'long', 'trailLen', 3, 30, 1);
+    makeSlider(
+        trailWrap,
+        c.trailLength?.label || 'Trail Length',
+        c.trailLength?.sub || '',
+        c.trailLength?.ll || 'short',
+        c.trailLength?.lr || 'long',
+        'trailLen', 3, 30, 1
+    );
 
     const updateTrailEnabled = () => {
         const on = !!(window.S.showRibbons || window.S.tessRibbons);
         trailWrap.classList.toggle('disabled', !on);
-        trailHdr.style.opacity = on ? '' : '0.35';
     };
     window._toggleUpdaters = window._toggleUpdaters || {};
     ['showRibbons', 'tessRibbons'].forEach(k => {
@@ -5115,22 +5419,12 @@ export function buildUI(engine) {
     ]);
 
     // ─── Color Controls ────────────────────────────────────────────────────
-    makeSlider(sb, c.colorRange?.label || 'Color Range', c.colorRange?.sub ||'spectrum width', c.colorRange?.ll ||'tight', c.colorRange?.lr ||'wide', 'hue', 0.01, 1, 0.01, () => {
+    makeSlider(sb, c.colorRange?.label || 'Color Spectrum Range', c.colorRange?.sub ||'', c.colorRange?.ll ||'tight', c.colorRange?.lr ||'wide', 'hue', 0.01, 1, 0.01, () => {
         if (window.engine) window.engine.updateUniforms();
     });
-    makeSlider(sb, c.saturation?.label || 'Saturation', c.saturation?.sub ||'gray vs color', c.saturation?.ll ||'muted', c.saturation?.lr ||'vivid', 'sat', 0, 1.0, 0.01, () => {
+    makeSlider(sb, c.saturation?.label || 'Color Saturation', c.saturation?.sub ||'', c.saturation?.ll ||'muted', c.saturation?.lr ||'vivid', 'sat', 0, 1.0, 0.01, () => {
         if (window.engine) window.engine.updateUniforms();
     });
-
-    makeSlider(sb, c.opacity?.label || 'Opacity', c.opacity?.sub ||'', c.opacity?.ll ||'ghost', c.opacity?.lr ||'solid', 'opacity', 0, 1, .05);
-
-    const bgCanvas = document.getElementById('bgGlow');
-    const bD = makeSlider(sb, c.backdropOpacity?.label || 'Backdrop Opacity', c.backdropOpacity?.sub ||'', c.backdropOpacity?.ll ||'off', c.backdropOpacity?.lr ||'bright', 'bgGlow', 0, .8, .02);
-    if (bgCanvas) {
-        bD.querySelector('input').addEventListener('input', () => { bgCanvas.style.opacity = window.S.bgGlow });
-        const blD = makeSlider(sb, c.backdropBlur?.label || 'Backdrop Blur', c.backdropBlur?.sub ||'', c.backdropBlur?.ll ||'crisp', c.backdropBlur?.lr ||'soft', 'bgBlur', 0, 100, 1);
-        blD.querySelector('input').addEventListener('input', () => { bgCanvas.style.filter = 'blur(' + window.S.bgBlur + 'px)' });
-    }
 
     const ob = document.getElementById('offsetsBody');
     if (ob) {
@@ -5241,13 +5535,12 @@ export function buildUI(engine) {
         _profInput.style.cssText = 'flex:1;background:rgba(8,8,16,0.7);border:1px solid rgba(40,40,70,0.6);color:#cce6ff;padding:5px 7px;border-radius:3px;font-family:inherit;font-size:10px;outline:none;';
         _profRow.appendChild(_profInput);
         profileSection.appendChild(_profRow);
-        const _profIdRow = document.createElement('div');
-        _profIdRow.style.cssText = 'font-size:8px;color:#5a6a7a;letter-spacing:.04em;margin-bottom:10px;';
-        // id is a Date.now()+random base36 string in normal use; defensively
-        // sanitize in case localStorage was tampered with.
-        const _safeId = sanitizeName(window.profile?.id, { maxLen: 100 }) || '(none)';
-        _profIdRow.textContent = 'id: ' + _safeId;
-        profileSection.appendChild(_profIdRow);
+        // Profile ID is intentionally not shown in the UI. It exists as
+        // plumbing (stamped on waypoints as authorId, used for future
+        // multiplayer disambiguation) but has no user-facing purpose at
+        // v1, so displaying it added visual noise without value. Keep the
+        // sanitize logic in loadOrCreateProfile so it's still safe if
+        // we ever expose it.
         profilePane.appendChild(profileSection);
         const usernameInput = _profInput;
         usernameInput.addEventListener('change', () => {
@@ -5256,53 +5549,27 @@ export function buildUI(engine) {
         });
 
         // ─── Save Progress ─────────────────────────────────────────────────
-        // Placed under Profile (beneath the user's ID) because save files
-        // are an extension of "who you are" in the app — your captures,
-        // your settings, your identity travel together. Sits at the bottom
-        // of the profile pane so the section header order reads as a
-        // natural progression: Profile → Save Progress.
-        //
-        // Four toggles control what the file contains: Settings (looks &
-        // simulation defaults), Profile (username/id), Waypoints
-        // (collection), Thumbnails (the heavy embedded images on each
-        // waypoint). Thumbnails depends on Waypoints — selecting it
-        // without Waypoints would orphan the image data — and the
-        // dependency is enforced visually by greying out Thumbnails when
-        // Waypoints is off. If all four toggles are off the Save button
-        // disables; the user discovers the relationship by trying and
-        // seeing the button go inert. The toggle state persists across
-        // sessions (window.S.exportInclude* fields) so a user who always
-        // exports aesthetic-only doesn't re-tick boxes every time.
-        makeSection(profilePane, 'Save Progress');
+        // Four toggles: Config / Profile / Waypoints / Thumbs. Thumbs depends
+        // on Waypoints (orphan data otherwise) — enforced via .save-thumb-
+        // disabled. Save button disables when nothing selected.
+        makeSection(profilePane, 'Save Progress', 'choose what to include');
 
-        const _saveInclHdr = document.createElement('div');
-        _saveInclHdr.className = 'subsection';
-        _saveInclHdr.textContent = 'Include in save file';
-        profilePane.appendChild(_saveInclHdr);
-
-        // Row 1: Settings + Profile — the impersonal/personal split.
-        const exportRow1 = makeGroupToggles(profilePane, [
-            { label: 'Settings', key: 'exportIncludeSettings' },
-            { label: 'Profile',  key: 'exportIncludeProfile'  }
-        ]);
-        // Row 2: Waypoints + Thumbnails — collection-related pair with
-        // dependency (Thumbnails requires Waypoints).
-        const exportRow2 = makeGroupToggles(profilePane, [
-            { label: 'Waypoints',  key: 'exportIncludeWaypoints'  },
-            { label: 'Thumbnails', key: 'exportIncludeThumbnails' }
+        const exportRow = makeButtonRow(profilePane, [
+            { label: 'Config',    key: 'exportIncludeSettings'   },
+            { label: 'Profile',   key: 'exportIncludeProfile'    },
+            { label: 'Waypoints', key: 'exportIncludeWaypoints'  },
+            { label: 'Thumbs',    key: 'exportIncludeThumbnails' }
         ]);
 
         const saveSection = document.createElement('div');
-        saveSection.style.cssText = 'margin-top:8px;margin-bottom:8px;display:flex;gap:6px;';
+        saveSection.style.cssText = 'margin-top:10px;margin-bottom:18px;display:flex;gap:6px;';
         const exportBtn = document.createElement('div');
         exportBtn.className = 'btn';
-        exportBtn.style.cssText = 'flex:1;text-align:center;cursor:pointer;color:#cce6ff;justify-content:center;';
+        exportBtn.style.cssText = 'flex:1;text-align:center;cursor:pointer;justify-content:center;';
         exportBtn.textContent = 'Save';
         exportBtn.addEventListener('click', () => {
             // Defense-in-depth: even though the button is disabled when no
             // toggles are on, double-check before triggering an export.
-            // Belt-and-suspenders against any future code path that bypasses
-            // the click handler (keyboard shortcuts, etc.).
             const anyOn = !!(window.S.exportIncludeSettings || window.S.exportIncludeProfile
                           || window.S.exportIncludeWaypoints || window.S.exportIncludeThumbnails);
             if (!anyOn) return;
@@ -5311,7 +5578,7 @@ export function buildUI(engine) {
         saveSection.appendChild(exportBtn);
         const importBtn = document.createElement('div');
         importBtn.className = 'btn';
-        importBtn.style.cssText = 'flex:1;text-align:center;cursor:pointer;color:#cce6ff;justify-content:center;';
+        importBtn.style.cssText = 'flex:1;text-align:center;cursor:pointer;justify-content:center;';
         importBtn.textContent = 'Load';
         importBtn.addEventListener('click', () => {
             const inp = document.createElement('input');
@@ -5326,64 +5593,37 @@ export function buildUI(engine) {
         saveSection.appendChild(importBtn);
         profilePane.appendChild(saveSection);
 
-        // Wire the dependency + Save-button-disable logic. Two coupled
-        // behaviors:
-        //
-        //   1. Thumbnails-requires-Waypoints. When Waypoints turns off, we
-        //      visually grey out Thumbnails AND force its state to off so
-        //      the user can't be silently in a state where they've ticked
-        //      Thumbnails-only and assume they'll get thumbnails on import.
-        //      When Waypoints comes back on, Thumbnails restores to its
-        //      pre-disable state (we remember the user's last intent via
-        //      _thumbWasOnBeforeDisable so toggling Waypoints off/on
-        //      doesn't lose their choice).
-        //
-        //   2. Save-button enabled iff at least one toggle is on. Empty
-        //      export files are silly but harmless — disabling the button
-        //      teaches the user the toggles → action relationship without
-        //      a confirmation dialog or error message. Discovery via
-        //      tactile feedback.
+        // Dependency + Save-button enable logic:
+        //   1. Thumbs depends on Waypoints. Off → grey .save-thumb-disabled
+        //      and force-off; back on → restore via _thumbWasOnBeforeDisable.
+        //   2. Save button enabled iff at least one toggle is on.
         let _thumbWasOnBeforeDisable = window.S.exportIncludeThumbnails !== false;
         const updateExportUI = () => {
             const wpOn = !!window.S.exportIncludeWaypoints;
-            // Thumbnails dependency on Waypoints.
+            // Thumbs dependency on Waypoints.
             if (!wpOn && window.S.exportIncludeThumbnails) {
-                // User just turned Waypoints off while Thumbnails was on.
-                // Remember that for restore-on-reenable, then force-clear.
                 _thumbWasOnBeforeDisable = true;
                 window.S.exportIncludeThumbnails = false;
                 try { localStorage.setItem('ss_state', JSON.stringify(window.S)); } catch (e) {}
-                // The Thumbnails tab in exportRow2 has an updater registered
-                // under its own key; fire it so the button visually deselects.
                 const upd = window._toggleUpdaters && window._toggleUpdaters['exportIncludeThumbnails'];
                 if (upd) upd.forEach(fn => { try { fn(); } catch (e) {} });
             } else if (wpOn && _thumbWasOnBeforeDisable && !window.S.exportIncludeThumbnails) {
-                // Restore on re-enable, but only if the user hasn't already
-                // re-clicked Thumbnails themselves (which would have flipped
-                // the flag back on without our help). Safe because we only
-                // reach this branch when Thumbnails is off AND was-on-before.
                 window.S.exportIncludeThumbnails = true;
                 try { localStorage.setItem('ss_state', JSON.stringify(window.S)); } catch (e) {}
                 const upd = window._toggleUpdaters && window._toggleUpdaters['exportIncludeThumbnails'];
                 if (upd) upd.forEach(fn => { try { fn(); } catch (e) {} });
             }
-            exportRow2.classList.toggle('thumb-disabled', !wpOn);
-            // CSS targets the Thumbnails button specifically — see app.css.
-            // The whole row isn't disabled because Waypoints itself still
-            // needs to be clickable.
+            // .save-thumb-disabled: disables only the 4th button (Thumbs)
+            // when Waypoints is off. Custom class rather than .thumb-disabled
+            // since that one targets nth-child(2) historically.
+            exportRow.classList.toggle('save-thumb-disabled', !wpOn);
 
             // Save button enable: at least one toggle on.
             const anyOn = !!(window.S.exportIncludeSettings || window.S.exportIncludeProfile
                           || window.S.exportIncludeWaypoints || window.S.exportIncludeThumbnails);
             exportBtn.classList.toggle('disabled', !anyOn);
         };
-        // If the user clicks the Thumbnails tab directly, remember that as
-        // their explicit intent (resets the auto-restore behavior).
         const _captureThumbIntent = () => {
-            // Read after the click handler in makeGroupToggles has flipped
-            // window.S.exportIncludeThumbnails. If Waypoints is on (the
-            // only state in which this click is meaningful), record the new
-            // value as the user's most recent explicit intent.
             if (window.S.exportIncludeWaypoints) {
                 _thumbWasOnBeforeDisable = !!window.S.exportIncludeThumbnails;
             }
@@ -5398,25 +5638,84 @@ export function buildUI(engine) {
         window._toggleUpdaters['exportIncludeThumbnails'].add(updateExportUI);
         updateExportUI();
 
+        // ─── Clear Data ────────────────────────────────────────────────────
+        // Two destructive actions. .btn-danger styling (red border+text)
+        // + confirmation modal on click.
+        //   Clear Waypoints — wipes waypoints; preserves settings/profile.
+        //   Clear All Data  — full reset, regenerates profile.
+        makeSection(profilePane, 'Delete Data', 'this is irreversible');
+        const clearSection = document.createElement('div');
+        clearSection.style.cssText = 'margin-top:10px;margin-bottom:4px;display:flex;flex-direction:column;gap:8px;';
+
+        const clearWpBtn = document.createElement('div');
+        clearWpBtn.className = 'btn btn-danger';
+        clearWpBtn.style.cssText = 'text-align:center;cursor:pointer;justify-content:center;';
+        clearWpBtn.textContent = 'Clear Waypoints';
+        clearWpBtn.addEventListener('click', () => {
+            const n = (window.waypoints || []).length;
+            if (n === 0) {
+                if (window.showToast) window.showToast('No waypoints to clear');
+                return;
+            }
+            if (!confirm(`Delete all ${n} waypoint${n === 1 ? '' : 's'}?\n\nThis cannot be undone. Your settings and profile will be preserved.\n\n(Tip: export your data first if you might want it back.)`)) return;
+            window.waypoints = [];
+            try { localStorage.removeItem('ss_waypoints'); } catch (e) {}
+            try { localStorage.removeItem('ss6_standalone_wp'); } catch (e) {}
+            if (window.buildAtlasUI && window.engine) window.buildAtlasUI(window.engine);
+            if (window.showToast) window.showToast('Waypoints cleared');
+        });
+        clearSection.appendChild(clearWpBtn);
+
+        const clearAllBtn = document.createElement('div');
+        clearAllBtn.className = 'btn btn-danger';
+        clearAllBtn.style.cssText = 'text-align:center;cursor:pointer;justify-content:center;';
+        clearAllBtn.textContent = 'Clear All Data';
+        clearAllBtn.addEventListener('click', () => {
+            if (!confirm(`Reset everything to default state?\n\nThis will delete:\n  • All waypoints (${(window.waypoints||[]).length})\n  • All settings (theme, defaults, preferences)\n  • Your profile (id and username)\n\nThis cannot be undone. The app will reload after clearing.\n\n(Tip: export your data first if you might want it back.)`)) return;
+            try {
+                // Targeted removal rather than localStorage.clear() so we
+                // don't wipe unrelated origin data (e.g. devtools state).
+                ['ss_state', 'ss_waypoints', 'ss6_standalone_wp', 'ss_profile',
+                 'ss6_panels', 'ss_camera', 'ss_radial'].forEach(k => {
+                    try { localStorage.removeItem(k); } catch (e) {}
+                });
+            } catch (e) {}
+            // Reload triggers fresh hydration from defaults (no localStorage
+            // to read) and a new profile generation.
+            location.reload();
+        });
+        clearSection.appendChild(clearAllBtn);
+        profilePane.appendChild(clearSection);
+
         // ─── UI PANE ───────────────────────────────────────────────────────
-        // Order per spec: Panel Opacity → Button Opacity → UI Zoom → UI
-        // Scanlines → Screen Scanlines → Radial Button Shape → Theme.
-        // Reads top-to-bottom from "how transparent" to "how it looks" to
-        // "what flavor" — coarse-to-fine adjustment.
-        makeSection(uiPane, 'Interface');
+        // Order: Panel Opacity → Button Opacity → Backdrop Opacity/Blur →
+        // UI Zoom → Scanlines → Reference Grid → Radial Shape → Theme.
         makeSlider(uiPane, c.panelOpacity?.label || 'Panel Opacity', c.panelOpacity?.sub ||'', c.panelOpacity?.ll ||'clear', c.panelOpacity?.lr ||'solid', 'panelOpacity', 0, 1, .05, () => {
             updatePO();
         });
         makeSlider(uiPane, 'Button Opacity', '', 'clear', 'solid', 'buttonOpacity', 0, 1, .05, () => {
             updatePO();
         });
+        // Backdrop sliders wire directly to the #bgGlow DIV's style so
+        // changes preview without a render-pipeline round-trip. Same logic
+        // these had when they lived in Optics.
+        const _bgCanvasUI = document.getElementById('bgGlow');
+        const _bgOpD = makeSlider(uiPane, c.backdropOpacity?.label || 'Backdrop Opacity', c.backdropOpacity?.sub ||'', c.backdropOpacity?.ll ||'off', c.backdropOpacity?.lr ||'bright', 'bgGlow', 0, .8, .02);
+        if (_bgCanvasUI && _bgOpD) {
+            _bgOpD.querySelector('input').addEventListener('input', () => { _bgCanvasUI.style.opacity = window.S.bgGlow; });
+            const _bgBlD = makeSlider(uiPane, c.backdropBlur?.label || 'Backdrop Blur', c.backdropBlur?.sub ||'', c.backdropBlur?.ll ||'crisp', c.backdropBlur?.lr ||'soft', 'bgBlur', 0, 100, 1);
+            if (_bgBlD) _bgBlD.querySelector('input').addEventListener('input', () => { _bgCanvasUI.style.filter = 'blur(' + window.S.bgBlur + 'px)'; });
+        }
         makeSlider(uiPane, 'UI Zoom', '', '50%', '150%', 'uiZoom', 0.5, 1.5, .05, (val) => {
             updateUIZoom(val);
         });
 
-        makeSection(uiPane, 'Scanlines');
-        makeSlider(uiPane, 'UI Scanlines', 'panel overlay', 'off', 'strong', 'uiScanlines', 0, 0.5, 0.01, () => { applyTheme(); });
-        makeSlider(uiPane, 'Screen Scanlines', 'canvas overlay', 'off', 'strong', 'screenScanlines', 0, 0.5, 0.01, () => { applyTheme(); });
+        makeSlider(uiPane, 'UI Scanlines', '', 'off', 'strong', 'uiScanlines', 0, 0.5, 0.01, () => { applyTheme(); });
+        makeSlider(uiPane, 'Screen Scanlines', '', 'off', 'strong', 'screenScanlines', 0, 0.5, 0.01, () => { applyTheme(); });
+
+        // Reference Grid — wireframe sphere around the simulation that gives
+        // spatial bearings. Off by default; raising the slider fades it in.
+        makeSlider(uiPane, 'Reference Grid', '', 'off', 'visible', 'referenceGrid', 0, 1, 0.02);
 
         makeSection(uiPane, 'Radial Button Shape');
         makeGroupToggles(uiPane, [
@@ -5431,38 +5730,22 @@ export function buildUI(engine) {
         ]);
 
         // ─── SYSTEM PANE ───────────────────────────────────────────────────
-        // System holds capture/save behavior — narrower scope than the old
-        // version. Interface customization moved to the UI tab for cleaner
-        // information architecture.
-        //
-        // ─── Save Screenshot on new ────────────────────────────────────────
-        // Single section header with two buttons: Waypoint / Thumbnail.
-        // Either being on enables the Include sub-controls; both off
-        // disables them visually and functionally, since there's no save
-        // happening to include anything in.
-        makeSection(systemPane, 'Save Screenshot on new');
+        // ─── Save Screenshot ──────────────────────────────────────────────
+        // Four toggles: Waypoint/Thumb (save triggers) + BG/Scanlines
+        // (what to include). BG/Scanlines auto-disable when neither
+        // trigger is on, via .include-disabled.
+        makeSection(systemPane, 'Save Screenshot', 'choose what to include');
 
-        const saveGroup = makeGroupToggles(systemPane, [
+        const ssRow = makeButtonRow(systemPane, [
             { label: 'Waypoint',  key: 'saveOnNewWaypoint' },
-            { label: 'Thumbnail', key: 'saveOnNewThumbnail' }
+            { label: 'Thumb',     key: 'saveOnNewThumbnail' },
+            { label: 'BG',        key: 'includeScreenshotBg' },
+            { label: 'Scanlines', key: 'includeScreenshotScanlines' }
         ]);
 
-        const inclHdr = document.createElement('div');
-        inclHdr.className = 'subsection';
-        inclHdr.textContent = 'Include';
-        systemPane.appendChild(inclHdr);
-        const inclGroup = makeGroupToggles(systemPane, [
-            { label: 'Background', key: 'includeScreenshotBg' },
-            { label: 'Scanlines',  key: 'includeScreenshotScanlines' }
-        ]);
-
-        // Live coupling: Include group enabled iff at least one Save toggle
-        // is on. Registered in _toggleUpdaters under both Save keys so the
-        // central updater dispatch (in makeGroupToggles click) fires this
-        // when either toggle changes. Runs once on build for initial state.
         const updateInclEnabled = () => {
             const anySave = !!window.S.saveOnNewWaypoint || !!window.S.saveOnNewThumbnail;
-            inclGroup.classList.toggle('disabled', !anySave);
+            ssRow.classList.toggle('include-disabled', !anySave);
         };
         window._toggleUpdaters = window._toggleUpdaters || {};
         ['saveOnNewWaypoint', 'saveOnNewThumbnail'].forEach(k => {
@@ -5471,27 +5754,48 @@ export function buildUI(engine) {
         });
         updateInclEnabled();
 
-        const inclSpacer = document.createElement('div');
-        inclSpacer.style.cssText = 'margin-bottom:14px;';
-        systemPane.appendChild(inclSpacer);
-
     }
 
+    // ─── Controls Panel ────────────────────────────────────────────────────
+    // Single shared CSS grid for all sections so the binding column stays
+    // aligned. Section headers span both columns with a faint bottom rule.
     const cb = document.getElementById('controlsBody'); cb.innerHTML = '';
-    const info = document.createElement('div'); info.style.cssText = 'padding:6px 8px;font-size:9px;color:#8ab8e8;letter-spacing:.04em;line-height:1.7';
-    
-    const inst = (T.instructions && T.instructions.global) ? T.instructions : { 
-        global: { title: 'Global Controls', keys: [] }, 
-        orbit: { title: 'Orbit Mode', keys: [] }, 
-        fly: { title: 'Fly Mode', keys: [] } 
+    cb.style.cssText = 'padding:8px 10px 12px;';
+
+    const inst = (T.instructions && T.instructions.global) ? T.instructions : {
+        global: { title: 'Global', rows: [] },
+        params: { title: 'Parameters', rows: [] },
+        orbit:  { title: 'Orbit Mode', rows: [] },
+        fly:    { title: 'Fly Mode', rows: [] }
     };
-    
-    let html = `<strong style="color:#7a9acc;font-size:10px">${inst.global.title}</strong><br>${inst.global.keys.join('<br>')}`;
-    html += `<br><br><strong style="color:#7a9acc;font-size:10px">${inst.orbit.title}</strong><br>${inst.orbit.keys.join('<br>')}`;
-    html += `<br><br><strong style="color:#7a9acc;font-size:10px">${inst.fly.title}</strong><br>${inst.fly.keys.join('<br>')}`;
-    
-    info.innerHTML = html;
-    cb.appendChild(info);
+
+    const grid = document.createElement('div');
+    grid.className = 'controls-grid';
+    cb.appendChild(grid);
+
+    const groups = ['global', 'params', 'orbit', 'fly'];
+    groups.forEach((g, i) => {
+        const sec = inst[g];
+        if (!sec || !Array.isArray(sec.rows) || sec.rows.length === 0) return;
+
+        // Section header spans both columns. Class controls bottom rule
+        // and spacing; first-section variant trims top margin.
+        const hdr = document.createElement('div');
+        hdr.className = 'controls-section-head' + (i === 0 ? ' is-first' : '');
+        hdr.textContent = sec.title;
+        grid.appendChild(hdr);
+
+        sec.rows.forEach(([behavior, binding]) => {
+            const lbl = document.createElement('div');
+            lbl.className = 'controls-row-label';
+            lbl.textContent = behavior;
+            grid.appendChild(lbl);
+            const bnd = document.createElement('div');
+            bnd.className = 'controls-row-binding';
+            bnd.textContent = binding;
+            grid.appendChild(bnd);
+        });
+    });
 
     // Build Atlas UI
     buildAtlasUI(engine);
@@ -5557,6 +5861,13 @@ window.updateUIZoom = updateUIZoom;
 window.buildAtlasUI = buildAtlasUI;
 window.buildUI = buildUI;
 window.captureWaypoint = captureWaypoint;
+// Bug fix: saveWP was being called via window.saveWP from importShareString
+// and the JSON-import path, but the window assignment was missing — so
+// imported waypoints silently weren't persisting to localStorage. They'd
+// appear in the current session but vanish on refresh. With this line the
+// import paths' `if (window.saveWP) window.saveWP();` checks succeed and
+// the localStorage write actually happens.
+window.saveWP = saveWP;
 window.startTour = startTour;
 window.stopTour = stopTour;
 window.tour = tour;
@@ -5567,46 +5878,53 @@ window.SS_VERSION = SS_VERSION;
 
 // ─── Global State ──────────────────────────────────────────────────────────
 window.S = {
-	
+
     // ─── Simulation ────────────────────────────────────────────────────────
-    freeEnergy: 100000,
+    // Default-launch coordinate — handpicked location that gives new users
+    // an immediately interesting visual on first run. Captured via the
+    // share-string system from a known good location and committed here.
+    // Mass = 0.1 + viscosity = 0 + halfLife = 13.9 + tempo 2.7 produces
+    // a fast, fluid system with strong coherence dynamics that read as
+    // "alive" rather than "settling."
+    freeEnergy: 25000,
     resolution: 0.100,
-    inversion: 500,
-    halfLife: 15.0,
+    inversion: 30,
+    halfLife: 13.9,
     scaleDepth: 0.0,
     coherence: 1.0,
     equilibrium: 0.001,
     temperature: 0.0,
-    viscosity: 1.0,
-    mass: 5.0,
-    
-    // Visuals
-    tempo: 0.020,
+    viscosity: 0.0,
+    mass: 0.1,
+
+    // Optics
+    tempo: 2.7,
     showParticles: true,
     showRibbons: false,
     tessRibbons: false,
     shape: "circle",
     colorMode: 2,
-    hue: 0.3,
-    sat: 0.8,
+    hue: 0.59,
+    sat: 0.99,
     lightness: 0.9,
-    opacity: 0.75,
-    trailLen: 10,
-    bgGlow: 0.3,
+    opacity: 0.15,
+    trailLen: 27,
+    bgGlow: 0.15,
     bgBlur: 40,
-    
+
     // ─── Navigation ────────────────────────────────────────────────────────
     moveMode: "orbit",
-    
+
     // ─── UI ────────────────────────────────────────────────────────────────
     uiZoom: 1.0,
-    panelOpacity: 0.9,
-    buttonOpacity: 0.8,
+    panelOpacity: 0.45,
+    buttonOpacity: 1.0,
     uiVisible: true,
     theme: 'synthesist',     // 'classic' | 'synthesist'  (default: synthesist for the new build identity)
-    uiScanlines: 0,          // 0..0.5 opacity of CRT scanlines over panels
-    screenScanlines: 0.18,   // 0..0.5 opacity of CRT scanlines over the simulation canvas
+    uiScanlines: 0.06,       // 0..0.5 opacity of CRT scanlines over panels
+    screenScanlines: 0.06,   // 0..0.5 opacity of CRT scanlines over the simulation canvas
     buttonShape: 'hex',      // 'hex' | 'circle'  (radial menu button shape)
+    referenceGrid: 0,        // 0..1 opacity of background reference sphere grid
     // Screenshot save triggers, split per gesture so users can opt into one
     // or both flows. Old saveScreenshots key is migrated at load time.
     saveOnNewWaypoint: false,
@@ -5632,7 +5950,18 @@ window.S = {
     exportIncludeSettings:   true,
     exportIncludeProfile:    true,
     exportIncludeWaypoints:  true,
-    exportIncludeThumbnails: true
+    exportIncludeThumbnails: true,
+
+    // Share-code-builder toggle state. Same pattern as export toggles —
+    // persists per-user, respected by both the in-detail share builder
+    // and the quick-share button on each waypoint card. Coordinate +
+    // camera always travel together as "the location"; these four toggles
+    // control the optional layers a user might or might not want to
+    // include when sharing.
+    shareIncludeTitle:    true,
+    shareIncludeNotes:   true,
+    shareIncludeAuthor:  true,
+    shareIncludeOptics: true
 };
 window.DEFAULTS = { ...window.S };
 window.PARAM_KEYS = PARAM_KEYS;
@@ -5648,28 +5977,14 @@ window.collapsedCats = {};
 // ───────────────────────────────────────────────────────────────────────────
 
 // ─── Input sanitization & validation ───────────────────────────────────────
-// Defense-in-depth for the trust boundaries where untrusted data enters the
-// app: imported save files, share strings, and localStorage (which an
-// attacker with prior DOM access could have tampered with).
-//
-// Three helpers, used at every boundary:
+// Trust-boundary defenses for save files, share strings, and localStorage.
 //   sanitizeName(s, opts)  — coerce-to-string, strip control chars, length-cap.
-//                            Use on every user-facing string before it lands
-//                            in state or is interpolated anywhere.
-//   validateWaypoint(w)    — return a fresh waypoint object built field-by-
-//                            field with allowlisted keys and type-checked
-//                            values. Returns null on malformed input.
-//   hydrateState(raw)      — merge a raw state object into window.S using
-//                            window.DEFAULTS as the key allowlist, with
-//                            per-type coercion (numbers / bools / enums).
-//                            Unknown keys are dropped; tampered types are
-//                            ignored. Used at boot hydration AND import.
-//
-// The "real" defenses against XSS are at the DOM sinks (we use textContent
-// and DOM construction rather than innerHTML for any user-controlled data).
-// These helpers add a second layer: even if a future change re-introduces an
-// innerHTML interpolation by accident, the strings flowing through it have
-// already been control-char-stripped and length-capped.
+//   validateWaypoint(w)    — fresh waypoint from allowlisted keys + type checks.
+//                            Returns null on malformed input.
+//   hydrateState(raw)      — merge into window.S using DEFAULTS as allowlist,
+//                            per-type coercion. Unknown keys / bad types dropped.
+// Primary XSS defense is at DOM sinks (textContent, DOM construction).
+// These helpers are second-layer.
 function sanitizeName(s, opts) {
     const maxLen = (opts && opts.maxLen) || 200;
     const allowNewlines = !!(opts && opts.allowNewlines);
@@ -5707,7 +6022,7 @@ function validateWaypoint(w) {
         isImported: !!w.isImported,
         thumbAspect: (_isFiniteNumber(w.thumbAspect) && w.thumbAspect > 0 && w.thumbAspect < 100) ? w.thumbAspect : (16 / 9),
         params: {},
-        visuals: {},
+        optics: {},
         camDist: (_isFiniteNumber(w.camDist) && w.camDist > 0 && w.camDist < 1e6) ? w.camDist : 300,
         camPosArr: _isFiniteNumberArray(w.camPosArr, 3) ? w.camPosArr.slice(0, 3) : [0, 0, 300],
         camQuatArr: _isFiniteNumberArray(w.camQuatArr, 4) ? w.camQuatArr.slice(0, 4) : [0, 0, 0, 1]
@@ -5731,22 +6046,22 @@ function validateWaypoint(w) {
         if (_isFiniteNumber(inParams[k])) out.params[k] = inParams[k];
     });
 
-    // Visuals — explicit allowlist + per-key type rules.
-    const inV = (w.visuals && typeof w.visuals === 'object' && !Array.isArray(w.visuals)) ? w.visuals : {};
+    // Optics — explicit allowlist + per-key type rules.
+    const inV = (w.optics && typeof w.optics === 'object' && !Array.isArray(w.optics)) ? w.optics : {};
     const visNumKeys = ['hue', 'sat', 'lightness', 'opacity', 'tempo', 'trailLen',
                         'bgGlow', 'bgBlur', 'offsetX', 'offsetY', 'offsetZ', 'billboardOffset'];
-    visNumKeys.forEach(k => { if (_isFiniteNumber(inV[k])) out.visuals[k] = inV[k]; });
-    if (_isFiniteIntInRange(inV.colorMode, 0, 3)) out.visuals.colorMode = inV.colorMode;
-    if (typeof inV.showParticles === 'boolean') out.visuals.showParticles = inV.showParticles;
-    if (typeof inV.showRibbons === 'boolean')   out.visuals.showRibbons   = inV.showRibbons;
-    if (typeof inV.tessRibbons === 'boolean')   out.visuals.tessRibbons   = inV.tessRibbons;
-    if (typeof inV.shape === 'string' && _VALID_SHAPES.has(inV.shape)) out.visuals.shape = inV.shape;
+    visNumKeys.forEach(k => { if (_isFiniteNumber(inV[k])) out.optics[k] = inV[k]; });
+    if (_isFiniteIntInRange(inV.colorMode, 0, 3)) out.optics.colorMode = inV.colorMode;
+    if (typeof inV.showParticles === 'boolean') out.optics.showParticles = inV.showParticles;
+    if (typeof inV.showRibbons === 'boolean')   out.optics.showRibbons   = inV.showRibbons;
+    if (typeof inV.tessRibbons === 'boolean')   out.optics.tessRibbons   = inV.tessRibbons;
+    if (typeof inV.shape === 'string' && _VALID_SHAPES.has(inV.shape)) out.optics.shape = inV.shape;
 
     // Mods — MOD_KEYS allowlist, finite-number values only.
     const inMods = (inV.mods && typeof inV.mods === 'object' && !Array.isArray(inV.mods)) ? inV.mods : null;
     if (inMods) {
-        out.visuals.mods = {};
-        MOD_KEYS.forEach(k => { if (_isFiniteNumber(inMods[k])) out.visuals.mods[k] = inMods[k]; });
+        out.optics.mods = {};
+        MOD_KEYS.forEach(k => { if (_isFiniteNumber(inMods[k])) out.optics.mods[k] = inMods[k]; });
     }
 
     // Future-multiplayer fields — pass through with sanitization. authorId
@@ -5850,7 +6165,10 @@ function hydrateState(raw) {
 }
 
 // ─── Profile ───────────────────────────────────────────────────────────────
-// User-facing identity: a username + a server-clock-based ID generated on first run. Stamped onto every waypoint captured going forward, ready for multiplayer when it ships. Username is freely editable; ID is immutable.
+// User-facing ident: username + server-clock-based ID generated on first run.
+// Stamped onto every waypoint captured going forward,
+// ready for multiplayer when it ships.
+// Username is freely editable; ID is immutable.
 
 function loadOrCreateProfile() {
     let profile = null;
@@ -6494,18 +6812,37 @@ function toggleEntropyPanel() {
 window.toggleEntropyPanel = toggleEntropyPanel;
 
 // ─── Sharable Coordinate Strings ───────────────────────────────────────────
-// Pack a waypoint into a short string anyone can paste into Reddit/Discord // or scan as a QR. Multiplayer-stopgap so users can transport "places" they // found without needing a backend.
-// Wire format: "SS1:<base64url(payload)>"
-// Payload = JSON object with the same fields a waypoint carries, but rounded aggressively to keep the string short. The full waypoint format (with thumbnail, profile, etc.) lives in JSON exports; this is purely "where am I + what does the system look like".
+// Pack a waypoint into a short string for pasting into Reddit/Discord.
+// Format: "SS1:<base64url(payload)>" where payload is DEFLATE-compressed
+// JSON (or raw JSON for legacy decode). Decoder tries DEFLATE first,
+// falls back to raw on failure.
+//
+// Payload fields (all optional except p, c):
+//   p — params (10 sim values that ARE the coordinate)
+//   v — optics (17 visual fields; if shareIncludeOptics)
+//   m — modulations (subset of params being modulated)
+//   c — camera
+//   n — name/title (if shareIncludeTitle)
+//   d — notes (if shareIncludeNotes)
+//   a — author (if shareIncludeAuthor)
+//
+// Schema is additive — missing keys mean "don't apply." New visual fields
+// can be added under v without breaking old clients. Removals/renames
+// would require SS2: bump.
 
 const SHARE_PARAM_KEYS = PARAM_KEYS;
+// Visual fields that travel with a coordinate. Under DEFLATE the extra
+// fields cost almost nothing and recipients get a faithful reproduction.
 const SHARE_VISUAL_KEYS = [
-    'opacity', 'tempo', 'showParticles', 'showRibbons',
-    'tessRibbons', 'shape', 'colorMode'
+    'opacity', 'tempo', 'trailLen',
+    'showParticles', 'showRibbons', 'tessRibbons',
+    'shape', 'colorMode',
+    'hue', 'sat', 'lightness',
+    'bgGlow', 'bgBlur',
+    'offsetX', 'offsetY', 'offsetZ', 'billboardOffset'
 ];
 
 function _b64urlEncode(bytes) {
-    // bytes can be Uint8Array; produce URL-safe base64 (no =, no +/)
     let bin = '';
     for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
     return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
@@ -6519,9 +6856,56 @@ function _b64urlDecode(str) {
     return out;
 }
 
-function encodeShareString(wp) {
-    if (!wp) return null;
-    // Compact representation. Round each value to its sane precision.
+// DEFLATE via CompressionStream. Browser support: Chromium 80+, Firefox
+// 113+, Safari 16.4+. Callers fall back to raw-JSON on unsupported.
+async function _deflate(bytes) {
+    const cs = new CompressionStream('deflate-raw');
+    const writer = cs.writable.getWriter();
+    writer.write(bytes); writer.close();
+    const out = [];
+    const reader = cs.readable.getReader();
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        out.push(value);
+    }
+    const total = out.reduce((n, c) => n + c.length, 0);
+    const merged = new Uint8Array(total);
+    let off = 0;
+    for (const c of out) { merged.set(c, off); off += c.length; }
+    return merged;
+}
+async function _inflate(bytes) {
+    const cs = new DecompressionStream('deflate-raw');
+    const writer = cs.writable.getWriter();
+    writer.write(bytes); writer.close();
+    const out = [];
+    const reader = cs.readable.getReader();
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        out.push(value);
+    }
+    const total = out.reduce((n, c) => n + c.length, 0);
+    const merged = new Uint8Array(total);
+    let off = 0;
+    for (const c of out) { merged.set(c, off); off += c.length; }
+    return merged;
+}
+
+// Build the JSON payload from a waypoint + options. Pure function so we
+// can also use it to compute char counts without actually committing to
+// the compression step.
+function _buildSharePayload(wp, opts) {
+    const o = opts || {};
+    const inclName    = o.includeName    !== false;
+    const inclNotes   = o.includeNotes   !== false;
+    const inclAuthor  = o.includeAuthor  !== false;
+    const inclOptics = o.includeOptics !== false;
+
+    // Compact representation. Round each value to its sane precision —
+    // saves bytes pre-compression and removes float noise like
+    // 0.30000000000000004 in the output.
     const PREC = {
         opacity: 2, hue: 3, sat: 2, lightness: 2,
         equilibrium: 3, temperature: 2, viscosity: 2, mass: 2,
@@ -6536,78 +6920,163 @@ function encodeShareString(wp) {
         const f = Math.pow(10, p);
         return Math.round(v * f) / f;
     };
-    
-    const payload = { p: {}, v: {}, m: {}, c: {} };
+
+    const payload = { p: {}, c: {} };
+    // Coordinate (the 10 simulation params) and camera are always included
+    // — they ARE the "location." Without them the share string is empty.
     SHARE_PARAM_KEYS.forEach(k => {
         if (wp.params && wp.params[k] !== undefined) payload.p[k] = round(k, wp.params[k]);
     });
-    SHARE_VISUAL_KEYS.forEach(k => {
-        if (wp.visuals && wp.visuals[k] !== undefined) payload.v[k] = wp.visuals[k];
-    });
-    const savedMods = wp.visuals && wp.visuals.mods ? wp.visuals.mods : {};
-    MOD_KEYS.forEach(k => {
-        if (savedMods[k] !== undefined) payload.m[k] = round(k, savedMods[k]);
-    });
-    if (Object.keys(payload.m).length === 0) delete payload.m;
-    // Camera: round positions to whole numbers, quat to 4 decimal places
-    if (wp.camDist !== undefined)    payload.c.d  = Math.round(wp.camDist);
+    if (wp.camDist !== undefined) payload.c.d = Math.round(wp.camDist);
     if (wp.camPosArr) payload.c.p = wp.camPosArr.map(x => Math.round(x));
     if (wp.camQuatArr) payload.c.q = wp.camQuatArr.map(x => Math.round(x * 10000) / 10000);
-    if (wp.name) payload.n = wp.name;
-    
+
+    if (inclOptics) {
+        payload.v = {};
+        SHARE_VISUAL_KEYS.forEach(k => {
+            if (wp.optics && wp.optics[k] !== undefined) payload.v[k] = wp.optics[k];
+        });
+        const savedMods = wp.optics && wp.optics.mods ? wp.optics.mods : {};
+        const m = {};
+        MOD_KEYS.forEach(k => {
+            if (savedMods[k] !== undefined) m[k] = round(k, savedMods[k]);
+        });
+        if (Object.keys(m).length > 0) payload.m = m;
+    }
+    if (inclName && wp.name) payload.n = wp.name;
+    if (inclNotes && wp.notes) payload.d = wp.notes;
+    if (inclAuthor && wp.authorName) payload.a = wp.authorName;
+
+    return payload;
+}
+
+// Async because CompressionStream is async. Two callers in the codebase:
+// importShareString (already async-friendly) and the share-builder UI
+// (which awaits via Promise.then). Returns the final SS1:... string.
+async function encodeShareString(wp, opts) {
+    if (!wp) return null;
+    const payload = _buildSharePayload(wp, opts);
     const json = JSON.stringify(payload);
     const bytes = new TextEncoder().encode(json);
+
+    // Try DEFLATE. If the browser doesn't support CompressionStream (very
+    // old, predates 2023), fall back to raw JSON inside SS1:. Both formats
+    // share the same SS1: prefix; the decoder distinguishes by trying
+    // inflate first and parsing on failure.
+    try {
+        if (typeof CompressionStream !== 'undefined') {
+            const compressed = await _deflate(bytes);
+            // Only ship the compressed form if it's actually shorter
+            // (tiny payloads can grow under DEFLATE headers). For typical
+            // waypoint payloads compressed is always smaller, but the
+            // safety check keeps the fallback honest.
+            if (compressed.length < bytes.length) {
+                return 'SS1:' + _b64urlEncode(compressed);
+            }
+        }
+    } catch (e) { /* fall through to raw */ }
     return 'SS1:' + _b64urlEncode(bytes);
 }
 
-function decodeShareString(str) {
+// Synchronous "approximate size" estimator — used by the live char count
+// in the share-builder UI without paying the cost of an async compression
+// round-trip on every toggle click. The estimate compresses the JSON
+// using a quick approximation (rough DEFLATE ratio); the actual generated
+// string can differ by a few characters. Good enough for "is it getting
+// bigger or smaller" feedback.
+function _estimateShareLength(wp, opts) {
+    const payload = _buildSharePayload(wp, opts);
+    const json = JSON.stringify(payload);
+    // Rough DEFLATE estimate for JSON-with-repeated-keys: 35-40% of
+    // input size at typical waypoint complexity. Conservative side of
+    // the range so the displayed number tends to overestimate by 1-3%,
+    // never underestimate (avoids "wait, the real string is longer
+    // than the count said").
+    const compressedEst = Math.ceil(json.length * 0.40);
+    // base64url overhead is ~4/3
+    return 4 /* SS1: */ + Math.ceil(compressedEst * 4 / 3);
+}
+
+async function decodeShareString(str) {
     if (typeof str !== 'string') return null;
     str = str.trim();
     if (!str.startsWith('SS1:')) return null;
+    let bytes;
     try {
-        const bytes = _b64urlDecode(str.slice(4));
+        bytes = _b64urlDecode(str.slice(4));
+    } catch (e) { return null; }
+
+    // Try DEFLATE first. If it succeeds, parse the inflated bytes as JSON.
+    // If it fails (bytes weren't deflate-compressed — they're legacy raw
+    // JSON), fall back to parsing the original bytes as JSON. Both paths
+    // produce the same payload shape downstream.
+    try {
+        if (typeof DecompressionStream !== 'undefined') {
+            const inflated = await _inflate(bytes);
+            const json = new TextDecoder().decode(inflated);
+            const payload = JSON.parse(json);
+            if (payload && typeof payload === 'object') return payload;
+        }
+    } catch (e) { /* fall through to raw */ }
+
+    try {
         const json = new TextDecoder().decode(bytes);
         const payload = JSON.parse(json);
-        if (!payload || typeof payload !== 'object') return null;
-        return payload;
-    } catch (e) {
-        return null;
-    }
+        if (payload && typeof payload === 'object') return payload;
+    } catch (e) { /* fall through to null */ }
+    return null;
 }
 
-// Apply a decoded share payload by creating a new waypoint from it. The new waypoint gets the importer's profile attached as authorId (NOT the original author's — that data isn't in the share string, by design).
-function importShareString(str) {
-    const payload = decodeShareString(str);
+// Apply a decoded share payload by creating a new waypoint from it. Async
+// because decodeShareString is now async (DEFLATE decompression is a
+// stream-based API). The new waypoint preserves the original author's
+// attribution if present in the payload — anyone can claim to have
+// discovered any coordinate so the field is purely social, but
+// preserving it lets attribution chain naturally as coordinates get
+// reshared.
+async function importShareString(str) {
+    const payload = await decodeShareString(str);
     if (!payload) {
         showToast('Invalid share string', { color: '#ff6d6d' });
         return null;
     }
 
-    // Build a waypoint-shaped candidate from the payload, then run it
-    // through the same validator we use for save-file imports. payload.p
-    // (params), payload.v (visuals), and payload.m (mods) only get fields
-    // that pass type + range checks; everything else is dropped. payload.n
-    // (name) is sanitized; we synthesize a fallback if it's missing.
+    // Build waypoint candidate from payload, then run through validateWaypoint
+    // (same validator as save-file imports). All fields are type/range checked
+    // or sanitized; unknown keys dropped.
     const _camD = payload.c && payload.c.d;
     const _camQ = payload.c && payload.c.q;
     const _camP = payload.c && payload.c.p;
+    // Notes: prefer shared notes, fall back to marker.
+    const importedNotes = (typeof payload.d === 'string' && payload.d.length > 0)
+        ? payload.d
+        : 'Imported from shared coordinates';
+    // Author: discoverer attribution (claim-anything, not verified).
+    const importedAuthor = (typeof payload.a === 'string' && payload.a.length > 0)
+        ? payload.a
+        : '';
     const candidate = {
         id: 'wp_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
         coordId: '',
         name: typeof payload.n === 'string' ? payload.n : '',
-        notes: 'Imported from shared coordinates',
+        notes: importedNotes,
         category: window.S.lastWpCat || 'Waypoints',
         isImported: true,
         params: payload.p,
-        visuals: Object.assign({}, payload.v || {}, payload.m ? { mods: payload.m } : {}),
+        optics: Object.assign({}, payload.v || {}, payload.m ? { mods: payload.m } : {}),
         camDist:    _camD,
         camQuatArr: _camQ,
         camPosArr:  _camP,
         timestamp: Date.now(),
         thumbnail: null,
         thumbAspect: 16 / 9,
+        // authorId stays as the importer's id (this is "who has this in
+        // their local waypoint list" — needed for any future per-user
+        // analytics). authorName is the original synthesist if shared,
+        // otherwise the importer (so the discovered-by line says something
+        // sensible either way).
         authorId: window.profile?.id,
-        authorName: window.profile?.username || ''
+        authorName: importedAuthor || window.profile?.username || ''
     };
 
     const wp = validateWaypoint(candidate);
@@ -6664,19 +7133,9 @@ async function copyToClipboard(str) {
 window.copyToClipboard = copyToClipboard;
 
 function init() {
-  // ─── UI visibility helper ────────────────────────────────────────────────
-  // Single source of truth for show/hide-all-UI. Used by:
-  //   • Tab keypress (user explicitly toggles)
-  //   • Boot flow (start hidden, fade in on splash dismiss)
-  //
-  // Implementation: toggles body.ui-ready. CSS rules tied to that class
-  // handle fade. Per-element .hidden classes remain untouched — panel
-  // open/closed state set by loadPanelPos persists across hide/reveal.
-  //
-  // Locked radials are deliberately NOT closed when hiding. A locked radial
-  // is the user's explicit "I want this menu pinned" gesture; Tab should
-  // tuck UI away around the lock, not destroy it. Unlocked radials get
-  // closed because they have no user-affirmed reason to persist.
+  // setUIVisibility — show/hide all UI via body.ui-ready toggle. Per-element
+  // .hidden classes (panel open/closed state) remain untouched.
+  // Locked radials persist through Tab; unlocked ones close.
   window.setUIVisibility = function(visible, opts = {}) {
     window.uiVisible = !!visible;
     document.body.classList.toggle('ui-ready', window.uiVisible);
@@ -6821,10 +7280,11 @@ function init() {
       'KeyX': { k: 'resolution', d: 0.2, min: 0.1, max: 20 },
       'KeyR': { k: 'equilibrium', d: -0.005, min: 0.001, max: 0.2 },
       'KeyT': { k: 'equilibrium', d: 0.005, min: 0.001, max: 0.2 },
-      // Temperature: F = firey (up), G = glacial (down). Matches slider
-      // labels and mnemonic so users don't second-guess the keybinds.
-      'KeyF': { k: 'temperature', d: 0.05, min: 0, max: 3 },
+      // Temperature: G = glacial (down), F = firey (up). Order in this
+      // map matches the other ± pairs (minus first, plus second) so the
+      // pattern is consistent across all parameter shortcuts.
       'KeyG': { k: 'temperature', d: -0.05, min: 0, max: 3 },
+      'KeyF': { k: 'temperature', d: 0.05, min: 0, max: 3 },
       'KeyV': { k: 'coherence', d: -2, min: 1, max: 200 },
       'KeyB': { k: 'coherence', d: 2, min: 1, max: 200 },
       'KeyI': { k: 'inversion', d: -5, min: 30, max: 500 },
@@ -6841,7 +7301,7 @@ function init() {
       // Skip all kMap shortcuts when a text-input surface has focus —
       // includes the .val editable spans on every slider. Without this,
       // typing into a slider's value field would trigger waypoint capture
-      // (Ctrl+S), audio toggle (P), tempo pause, etc.
+      // (Ctrl+S), tempo adjustments, etc.
       const t = e.target;
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
 
@@ -6881,7 +7341,13 @@ function init() {
       if (kMap[e.code]) {
           e.preventDefault();
           const p = kMap[e.code];
-          window.S[p.k] = Math.max(p.min, Math.min(p.max, window.S[p.k] + p.d));
+          // Uncapped on the high side (matches .val scrub/type). Floor
+          // (p.min) preserved — degenerate sim states below zero.
+          // freeEnergy keeps its ceiling (sizes a GPU buffer).
+          const raw = window.S[p.k] + p.d;
+          const lo = p.min;
+          const hi = (p.k === 'freeEnergy') ? p.max : Infinity;
+          window.S[p.k] = Math.max(lo, Math.min(hi, raw));
           if (window.sliderSync && window.sliderSync[p.k]) {
               window.sliderSync[p.k](window.S[p.k]);
           }

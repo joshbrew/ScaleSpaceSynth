@@ -13,27 +13,29 @@
     <div id="hud-title" class="hud-element">SCALE SPACE SYNTHESIST</div>
     <div id="hud" class="hud-element"><span id="hud-fps"></span> <span id="hud-info"></span></div>
     <div class="travel-indicator" id="travelInd">Traveling...</div>
-    <div class="panel hidden" id="panelParams" style="left:16px;top:44px;width:240px">
-      <div class="panel-head"><span>Parameters</span><span class="toggle" onclick="togglePanel('panelParams')">&minus;</span></div>
+    <div class="panel hidden" id="panelParams" style="left:16px;top:44px;width:265px">
+      <div class="panel-head"><span>Params</span><span class="toggle" onclick="togglePanel('panelParams')">&minus;</span></div>
       <div class="panel-body" id="paramsBody" style="padding:10px 12px"></div>
     </div>
-    <div class="panel hidden" id="panelSettings" style="right:16px;top:44px;width:220px">
-      <div class="panel-head"><span>Visuals</span><span class="toggle" onclick="togglePanel('panelSettings')">&minus;</span></div>
+    <div class="panel hidden" id="panelSettings" style="right:16px;top:44px;width:265px">
+      <div class="panel-head"><span>Optics</span><span class="toggle" onclick="togglePanel('panelSettings')">&minus;</span></div>
       <div class="panel-body" id="settingsBody"></div>
     </div>
-    <div class="panel hidden" id="panelConfig" style="right:16px;top:460px;width:220px">
+    <div class="panel hidden" id="panelConfig" style="right:16px;top:460px;width:265px">
       <div class="panel-head"><span>Config</span><span class="toggle" onclick="togglePanel('panelConfig')">&minus;</span></div>
       <div class="panel-body" id="configBody"></div>
     </div>
     <div class="panel hidden" id="panelAtlas" style="left:266px;top:44px;width:265px">
       <div class="panel-head"><span>Atlas</span><span class="toggle" onclick="togglePanel('panelAtlas')">&minus;</span></div>
       <div class="panel-body" id="atlasBody"></div>
+      <div id="atlasFooter"></div>
     </div>
-    <div class="panel hidden" id="panelControls" style="left:266px;top:560px;width:220px">
-      <div class="panel-head"><span>Global Controls</span><span class="toggle" onclick="togglePanel('panelControls')">&minus;</span></div>
+    <div class="panel hidden" id="panelControls" style="left:266px;top:560px;width:265px">
+      <div class="panel-head"><span>Controls</span><span class="toggle" onclick="togglePanel('panelControls')">&minus;</span></div>
       <div class="panel-body" id="controlsBody"></div>
     </div>
   </div>
+  <div id="strobeWarning" aria-live="polite">⚠ Caution: Flashing Visuals</div>
   <script type="module" src="/app.js"></script>
 </body>
 </html>
