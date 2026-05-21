@@ -16,6 +16,7 @@ Open `dist/index.html` in a WebGPU-capable browser (Chrome / Edge / Brave / Safa
 ## Edit it (any OS, no command line)
 
 **Windows:** double-click `1-INSTALL.bat` once, then `2-DEV-MODE.bat` to edit, `3-MAKE-BUILD.bat` to ship.
+
 **Mac:** same idea, use the `.command` files instead.
 
 Full plain-English instructions are in `START-HERE.txt`.
