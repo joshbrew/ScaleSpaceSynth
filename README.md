@@ -72,6 +72,11 @@ Original ask: editable by a designer, not just a developer. One file = no jumpin
 
 *More controls information available in the 'Controls' panel in the application.*
 
+## Tutorials
+
+* [Video demo- How to use Panels](https://www.reddit.com/r/ScaleSpace/comments/1svvcox/scale_space_bioclast_alpha_01_release_notes/)
+* [Video demo- How to use Radials](https://www.reddit.com/r/ScaleSpace/comments/1t2sugd/scale_space_bioclast_alpha_02_release_notes/)
+
 # Screenshots
 
 All screenshots are unedited. Differences in scanlines and backgrounds come from settings in Scale Space Synthesist.
