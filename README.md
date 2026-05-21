@@ -45,10 +45,6 @@ dist/          generated standalone build
 
 `src/app.js` reads top-to-bottom in seven labelled sections — `APP_TEXT`, `AudioManager`, `Atlas`, `Engine`, `RadialUI`, `UI`, `Bootstrap`. Use Ctrl+F to jump around.
 
-## Why a single source file
-
-Original ask: editable by a designer, not just a developer. One file = no jumping between modules, no losing your place. Vite still bundles three.js + Tone.js + your code into a single self-contained HTML on build, so the deliverable is portable to anywhere a browser can read a file.
-
 ## Keyboard shortcuts
 
 | Keys | Action |
