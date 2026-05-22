@@ -13,7 +13,7 @@ Part of the [Scale Space](https://reddit.com/r/ScaleSpace) project.
 
 ## Just run it
 
-[Play in the browser here](https://github.com/setzstone/ScaleSpaceSynth/releases). No account needed, 100% free.
+[Play in the browser here](https://setzstone.github.io/ScaleSpaceSynth/dist/). No account needed, 100% free.
 
 [Get it on itch.io](https://setzstone.itch.io/scale-space) (early access to new features)
 
