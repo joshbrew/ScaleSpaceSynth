@@ -11,9 +11,11 @@ Part of the [Scale Space](https://reddit.com/r/ScaleSpace) project.
 
 *Scroll further down for more photos.*
 
-This is a heavy optimization branch to push the framerates, improve memory/threading usage, and enables additional audiovisual fx and control. Just load a song, enable continuous randomization, and chill.
+This is a heavily optimized fork to push the framerates, improve memory/threading usage, and enables additional audiovisual fx and control with all that free CPU time. Just load a song, enable continuous randomization, and chill.
 
-Demos:
+## [Try this version (click me)](https://scalespacemusic.netlify.app/)
+
+Music Demos (youtube compression bad):
 
 [https://www.youtube.com/watch?v=gbVG4Wt_z_o](https://www.youtube.com/watch?v=gbVG4Wt_z_o)
 
