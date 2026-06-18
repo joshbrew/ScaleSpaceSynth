@@ -60,10 +60,12 @@ function _injectStyle() {
     top: 0;
     right: auto;
     bottom: auto;
-    width: 286px;
+    width: min(286px, calc(100vw - 20px));
+    box-sizing: border-box;
     z-index: 12000;
     max-height: min(76vh, calc(100vh - 86px));
     overflow-y: auto;
+    overflow-x: hidden;
     padding: 12px;
     border: 1px solid rgba(80, 110, 160, 0.62);
     border-radius: 5px;
@@ -92,6 +94,11 @@ function _injectStyle() {
     gap: 6px;
     align-items: center;
     margin: 8px 0;
+    min-width: 0;
+    max-width: 100%;
+}
+.audio-source-row.tight-wrap {
+    flex-wrap: wrap;
 }
 .audio-source-row > .audio-source-label {
     flex: 0 0 54px;
@@ -226,11 +233,13 @@ function _injectStyle() {
     display: flex;
     align-items: center;
     gap: 5px;
+    min-width: 0;
+    max-width: 100%;
     font-size: 9px;
     color: #9ebfe8;
     text-transform: uppercase;
     letter-spacing: 0.06em;
-    white-space: nowrap;
+    white-space: normal;
 }
 .audio-source-level-wrap {
     height: 5px;
@@ -570,7 +579,7 @@ export function initAudioSourceButton() {
     panel.appendChild(optsRow);
 
     const optsRow2 = document.createElement('div');
-    optsRow2.className = 'audio-source-row';
+    optsRow2.className = 'audio-source-row tight-wrap';
     optsRow2.style.justifyContent = 'space-between';
     const reactiveLab = document.createElement('label');
     reactiveLab.className = 'audio-source-check';
@@ -665,7 +674,7 @@ export function initAudioSourceButton() {
     panel.appendChild(_mkRangeRow('3D Fade', fx3DFade));
 
     const fxOptsRow = document.createElement('div');
-    fxOptsRow.className = 'audio-source-row';
+    fxOptsRow.className = 'audio-source-row tight-wrap';
     fxOptsRow.style.justifyContent = 'space-between';
     const fxRandLab = document.createElement('label');
     fxRandLab.className = 'audio-source-check';

@@ -59,6 +59,7 @@ export const AUDIO_2D_BACKDROP_PLUGINS = [
     { id: 'cellular',     label: 'Cell Field',             randomWeight: 0.70, tone: 'line' },
     { id: 'cellfield',    label: 'Cell Field Alt',         randomWeight: 0.70, tone: 'line' },
     { id: 'honeycomb',    label: 'Honeycomb',              randomWeight: 0.70, tone: 'line' },
+    { id: 'lightfield',   label: 'Light Field',            randomWeight: 1.05, tone: 'soft' },
     { id: 'trails',       label: 'Light Trails',           randomWeight: 0.85, tone: 'soft' },
 ];
 

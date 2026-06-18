@@ -49,10 +49,12 @@ const STATE = {
     lastCostMs: 0,
     randomStyle: '',
     randomNextAt: 0,
+    adaptiveStyle: '',
+    adaptiveNextAt: 0,
     renderStyle: '',
     previousStyle: '',
     styleBlendStart: 0,
-    styleBlendDuration: 1.6,
+    styleBlendDuration: 2.6,
     accentStyle: '',
     accentLevel: 0,
     accentNextAt: 0,
@@ -71,7 +73,14 @@ const STATE = {
     workerSeq: 0,
     workerLastRequestAt: 0,
     workerFrame: null,
+    workerFrameCache: new Map(),
+    workerFrameId: 0,
     workerFailed: false,
+    workerPool: [],
+    workerRequests: new Map(),
+    workerRequestStyleKey: '',
+    workerRequestStyleChangedAt: 0,
+    workerLastRestartAt: 0,
     backdropObjectMotion: null,
 };
 
@@ -236,19 +245,25 @@ function resolveVisualStyle(S, hue, t) {
     const style = String(S.visualEffectStyle || 'random');
     if (style === 'random') {
         const morph = Math.max(0.001, Number(S.visualEffectMorphRate) || 0.018);
-        const hold = clamp(10.5 - morph * 95 - (isAudioLive() ? STATE.beat * 2.0 : 0), 5.5, 14);
-        const beatCut = isAudioLive() && STATE.beat > 0.68 && t > STATE.randomNextAt - 2.0;
+        const hold = clamp(23.0 - morph * 120 - (isAudioLive() ? STATE.beat * 1.0 : 0), 14.0, 34.0);
+        const beatCut = isAudioLive() && STATE.beat > 0.78 && t > STATE.randomNextAt - 0.75;
         if (!pool.includes(STATE.randomStyle) || t >= STATE.randomNextAt || beatCut) {
             STATE.randomStyle = pickVisualStyle(pool, STATE.randomStyle);
             STATE.randomNextAt = t + hold + Math.random() * hold * 0.45;
         }
-        return commitVisualStyle(STATE.randomStyle, t, 1.8);
+        return commitVisualStyle(STATE.randomStyle, t, 5.4);
     }
     if (style === 'adaptive') {
-        const u = (((hue + t * (Number(S.visualEffectMorphRate) || 0.018)) % 1) + 1) % 1;
-        return commitVisualStyle(pool[Math.floor(u * pool.length) % pool.length] || 'cymatics', t, 1.9);
+        const morph = Math.max(0.001, Number(S.visualEffectMorphRate) || 0.018);
+        const hold = clamp(18.0 - morph * 78, 12.0, 26.0);
+        if (!pool.includes(STATE.adaptiveStyle) || t >= STATE.adaptiveNextAt) {
+            const u = (((hue + t * morph * 0.28) % 1) + 1) % 1;
+            STATE.adaptiveStyle = pool[Math.floor(u * pool.length) % pool.length] || 'cymatics';
+            STATE.adaptiveNextAt = t + hold + hash01(t * 0.37 + hue * 11.0) * hold * 0.28;
+        }
+        return commitVisualStyle(STATE.adaptiveStyle, t, 5.0);
     }
-    return commitVisualStyle(REGISTRY_FULL_EFFECT_STYLES.includes(style) ? style : 'cymatics', t, 0.8);
+    return commitVisualStyle(REGISTRY_FULL_EFFECT_STYLES.includes(style) ? style : 'cymatics', t, 4.0);
 }
 
 function zoomState() {
@@ -298,6 +313,204 @@ function backdropWorkerIntervalMs(S = window.S || {}) {
     return clamp(12 + (1 - detail) * 22, 10, 42);
 }
 
+function backdropRequestStyleKey(snapshot = {}) {
+    return [snapshot.style || '', snapshot.backdropStyle || 'classic'].join('|');
+}
+
+function updateBackdropTransitionState(styleKey, now = performance.now()) {
+    const key = String(styleKey || '');
+    if (!key) return 999999;
+    if (STATE.workerRequestStyleKey !== key) {
+        STATE.workerRequestStyleKey = key;
+        STATE.workerRequestStyleChangedAt = now;
+        STATE.backdropObjectMotion = null;
+        return 0;
+    }
+    return Math.max(0, now - (STATE.workerRequestStyleChangedAt || 0));
+}
+
+function previewBackdropTransitionAge(styleKey, now = performance.now()) {
+    const key = String(styleKey || '');
+    if (!key || STATE.workerRequestStyleKey !== key) return 0;
+    return Math.max(0, now - (STATE.workerRequestStyleChangedAt || 0));
+}
+
+function backdropTransitionDetailScale(styleAgeMs, styleBlend = 1, frameAgeMs = 0) {
+    const styleSettled = clamp(Number(styleAgeMs) / 3200, 0, 1);
+    const blendSettled = clamp(Number(styleBlend), 0, 1);
+    const transitionTrim = 0.50 + Math.min(styleSettled, blendSettled) * 0.50;
+    const staleTrim = frameAgeMs > 1250 ? 0.66 : frameAgeMs > 760 ? 0.82 : 1.0;
+    return clamp(Math.min(transitionTrim, staleTrim), 0.46, 1.0);
+}
+
+function desiredBackdropWorkerCount(S = window.S || {}, styleAgeMs = 999999) {
+    const configured = Number(S.visualEffect2DWorkerCount ?? S.visualEffectBackdropWorkers);
+    const configuredTransition = Number(S.visualEffect2DTransitionWorkers ?? S.visualEffectBackdropTransitionWorkers);
+    const nav = typeof navigator !== 'undefined' ? navigator : null;
+    const cores = Math.max(2, Math.min(8, (nav && nav.hardwareConcurrency) || 4));
+    const profile = String(S.perfProfile || 'balanced');
+    const cap = Math.max(1, Math.min(3, cores - 1));
+    if (Number.isFinite(configured)) return Math.max(1, Math.min(cap, Math.floor(configured)));
+    const transition = Number(styleAgeMs) < 3200;
+    if (transition && Number.isFinite(configuredTransition)) return Math.max(1, Math.min(cap, Math.floor(configuredTransition)));
+    // One live publisher is safer here. Multiple workers are still allowed when
+    // explicitly configured, but the default path should not alternate between
+    // workers that each carry their own scene timers and pulse history.
+    if (profile === 'potato') return 1;
+    return 1;
+}
+
+function syncWorkerMirrorState() {
+    const pool = Array.isArray(STATE.workerPool) ? STATE.workerPool : [];
+    const live = pool.filter(slot => slot && slot.worker);
+    STATE.worker = live[0] ? live[0].worker : null;
+    STATE.workerBusy = live.length > 0 && live.every(slot => !!slot.busy);
+    STATE.workerLastRestartAt = live.reduce((latest, slot) => Math.max(latest, slot.lastRestartAt || 0), STATE.workerLastRestartAt || 0);
+}
+
+function clearWorkerRequest(id) {
+    if (STATE.workerRequests && typeof STATE.workerRequests.delete === 'function') STATE.workerRequests.delete(id);
+}
+
+function makeVisualEffectWorkerSlot(index) {
+    const slot = {
+        index,
+        worker: null,
+        busy: false,
+        failed: false,
+        lastRequestAt: 0,
+        lastRestartAt: performance.now(),
+        lastStyleKey: '',
+        requestId: 0,
+    };
+    return spawnVisualEffectWorkerSlot(slot) ? slot : null;
+}
+
+function spawnVisualEffectWorkerSlot(slot) {
+    if (!slot || typeof Worker === 'undefined') return false;
+    try {
+        const w = new Worker(visualEffectsWorkerUrl);
+        slot.worker = w;
+        slot.busy = false;
+        slot.failed = false;
+        slot.lastRestartAt = performance.now();
+        w.onmessage = (e) => {
+            const m = e && e.data;
+            if (!m || typeof m !== 'object') return;
+            const meta = STATE.workerRequests && typeof STATE.workerRequests.get === 'function' ? STATE.workerRequests.get(m.id) : null;
+            if (m.type === 'frame') {
+                slot.busy = false;
+                slot.lastFinishedAt = performance.now();
+                syncWorkerMirrorState();
+                clearWorkerRequest(m.id);
+                const currentKey = String(STATE.workerRequestStyleKey || '');
+                const metaKey = String(meta?.styleKey || slot.lastStyleKey || '');
+                const now = performance.now();
+                const currentFrameAge = STATE.workerFrame ? Math.max(0, now - (Number(STATE.workerFrame.arrivedAt) || now)) : 9999;
+                const currentStyleFrame = !currentKey || metaKey === currentKey;
+                const newerFrame = (m.id | 0) >= (STATE.workerFrameId | 0);
+                const candidate = {
+                    id: m.id,
+                    workerIndex: slot.index,
+                    styleKey: metaKey,
+                    transition: !!meta?.transition,
+                    requestedAt: meta?.requestedAt || slot.lastRequestAt || 0,
+                    segments: Math.max(0, m.segments | 0),
+                    positions: m.positions,
+                    colors: m.colors,
+                    triangles: Math.max(0, m.triangles | 0),
+                    fillPositions: m.fillPositions,
+                    fillColors: m.fillColors,
+                    arrivedAt: now,
+                };
+                if (STATE.workerFrameCache && typeof STATE.workerFrameCache.set === 'function' && metaKey) {
+                    STATE.workerFrameCache.set(metaKey, candidate);
+                    if (STATE.workerFrameCache.size > 10) {
+                        const entries = Array.from(STATE.workerFrameCache.entries()).sort((a, b) => (b[1]?.arrivedAt || 0) - (a[1]?.arrivedAt || 0));
+                        STATE.workerFrameCache = new Map(entries.slice(0, 10));
+                    }
+                }
+                if (!currentStyleFrame && STATE.workerFrame) return;
+                if (!newerFrame && currentFrameAge < 360) return;
+                const helperFrame = slot.index !== 0;
+                const helperDuringTransition = helperFrame && !!meta?.transition;
+                // Helper workers may prewarm caches, but they should not own the
+                // live backdrop unless the primary has gone stale. Otherwise the
+                // background jumps between independent worker timelines.
+                if (helperFrame && STATE.workerFrame && currentFrameAge < 900) return;
+                if (helperDuringTransition && STATE.workerFrame && currentFrameAge < 1400) return;
+                STATE.workerFrameId = Math.max(STATE.workerFrameId | 0, m.id | 0);
+                STATE.workerFrame = candidate;
+            } else if (m.type === 'error') {
+                slot.busy = false;
+                syncWorkerMirrorState();
+                clearWorkerRequest(m.id);
+                console.warn('[visual-effects] worker error:', m.message || m);
+            }
+        };
+        w.onerror = (err) => {
+            slot.busy = false;
+            slot.failed = true;
+            try { w.terminate(); } catch (e) { console.error(e); }
+            slot.worker = null;
+            syncWorkerMirrorState();
+            console.warn('[visual-effects] worker unavailable:', err && err.message ? err.message : err);
+        };
+        return true;
+    } catch (err) {
+        slot.failed = true;
+        slot.worker = null;
+        console.warn('[visual-effects] worker spawn failed:', err && err.message ? err.message : err);
+        return false;
+    }
+}
+
+function ensureVisualEffectWorkerPool(targetCount = 1) {
+    if (typeof Worker === 'undefined') return false;
+    const target = Math.max(1, Math.min(4, Math.floor(Number(targetCount) || 1)));
+    if (!Array.isArray(STATE.workerPool)) STATE.workerPool = [];
+    STATE.workerPool = STATE.workerPool.filter(slot => slot && (slot.worker || slot.busy || !slot.failed));
+    while (STATE.workerPool.length < target) {
+        const slot = makeVisualEffectWorkerSlot(STATE.workerPool.length);
+        if (!slot) break;
+        STATE.workerPool.push(slot);
+    }
+    for (let i = STATE.workerPool.length - 1; i >= target; i--) {
+        const slot = STATE.workerPool[i];
+        if (!slot || slot.busy) continue;
+        try { slot.worker?.terminate(); } catch (e) { console.warn('[visual-effects] worker terminate failed:', e); }
+        STATE.workerPool.splice(i, 1);
+    }
+    syncWorkerMirrorState();
+    STATE.workerFailed = STATE.workerPool.length === 0;
+    return STATE.workerPool.some(slot => slot && slot.worker);
+}
+
+function ensureVisualEffectWorker() {
+    return ensureVisualEffectWorkerPool(1);
+}
+
+function recycleVisualEffectWorkerSlot(slot, reason = 'stale') {
+    if (!slot) return false;
+    try { slot.worker?.terminate(); } catch (e) { console.warn('[visual-effects] worker terminate failed:', e); }
+    if (slot.requestId) clearWorkerRequest(slot.requestId);
+    slot.worker = null;
+    slot.busy = false;
+    slot.failed = false;
+    slot.requestId = 0;
+    slot.lastRestartAt = performance.now();
+    const ok = spawnVisualEffectWorkerSlot(slot);
+    syncWorkerMirrorState();
+    return ok;
+}
+
+function recycleVisualEffectWorker(reason = 'stale') {
+    const pool = Array.isArray(STATE.workerPool) ? STATE.workerPool : [];
+    const primary = pool[0] || (STATE.worker ? { worker: STATE.worker, busy: STATE.workerBusy, lastRestartAt: STATE.workerLastRestartAt || 0, index: 0 } : null);
+    if (!primary) return false;
+    return recycleVisualEffectWorkerSlot(primary, reason);
+}
+
 function update2DBackdropOpacity(gpu, amount, S, fade2D) {
     const mix = clamp(Number(S.visualEffect2DBackdropMix ?? 1.0) || 1.0, 0.05, 2.5);
     const sliderLift = Math.pow(mix, 0.78);
@@ -333,22 +546,24 @@ function apply2DBackdropObjectMotion(gpu, amount, S, frameAgeMs = 0) {
     const seed = hashString01(style);
     const radial = /cymatics|rings|vectorscope|tunnel|bokeh|blob|bloom|nebula|opal|starfield/i.test(style);
     const matrix = /matrix/i.test(style);
+    const grid = /cell|honeycomb|moire|lattice/i.test(style);
     const ribbon = /ribbon|trail|aurora|sine|wave|silk|gradient/i.test(style);
-    const period = matrix ? 24 + seed * 18 : radial ? 16 + seed * 13 : 18 + seed * 15;
-    const duty = matrix ? 0.18 : radial ? 0.30 : ribbon ? 0.26 : 0.22;
+    const period = matrix ? 28 + seed * 20 : grid ? 24 + seed * 18 : radial ? 16 + seed * 13 : 18 + seed * 15;
+    const duty = matrix ? 0.10 : grid ? 0.14 : radial ? 0.30 : ribbon ? 0.26 : 0.22;
     const gate = dutyPulse(t + seed * period, seed, duty, period);
-    const staleGate = clamp((Number(frameAgeMs) - 260) / 1350, 0, 1) * 0.70;
+    const staleGate = clamp((Number(frameAgeMs) - 320) / 1500, 0, 1) * (matrix || grid ? 0.48 : 0.70);
     const active = Math.max(gate, staleGate);
-    const limit = (matrix ? 0.018 : radial ? 0.060 : ribbon ? 0.042 : 0.036) * clamp(0.70 + amount * 0.18, 0.65, 1.12);
+    const limit = (matrix ? 0.006 : grid ? 0.010 : radial ? 0.060 : ribbon ? 0.042 : 0.036) * clamp(0.70 + amount * 0.18, 0.65, 1.12);
     const slowA = Math.sin(t * (0.060 + seed * 0.028) + seed * 19.0);
     const slowB = Math.sin(t * (0.031 + seed * 0.019) + seed * 41.0) * 0.42;
     const targetAngle = active * limit * (slowA + slowB);
     const driftGate = Math.max(active * 0.72, staleGate);
     const halfW = Number(gpu.backdropHalfW) || 1;
     const halfH = Number(gpu.backdropHalfH) || 1;
-    const targetX = driftGate * halfW * 0.0040 * Math.sin(t * (0.050 + seed * 0.024) + seed * 9.0);
-    const targetY = driftGate * halfH * 0.0045 * Math.cos(t * (0.044 + seed * 0.019) + seed * 13.0);
-    const targetScale = 1 - Math.abs(targetAngle) * 0.030 - driftGate * 0.002;
+    const targetX = driftGate * halfW * (matrix ? 0.0014 : grid ? 0.0020 : 0.0040) * Math.sin(t * (0.050 + seed * 0.024) + seed * 9.0);
+    const targetY = driftGate * halfH * (matrix ? 0.0018 : grid ? 0.0022 : 0.0045) * Math.cos(t * (0.044 + seed * 0.019) + seed * 13.0);
+    const audioPulse = clamp((STATE.beat || 0) * (matrix || grid ? 0.0035 : 0.006) + (STATE.bass || 0) * (matrix || grid ? 0.0018 : 0.0035) + (STATE.treble || 0) * (matrix || grid ? 0.0016 : 0.0025), 0, matrix || grid ? 0.006 : 0.012);
+    const targetScale = 1 + audioPulse - Math.abs(targetAngle) * 0.030 - driftGate * (matrix || grid ? 0.0010 : 0.0020);
     let m = STATE.backdropObjectMotion;
     if (!m || m.style !== style) {
         m = STATE.backdropObjectMotion = { style, angle: targetAngle, x: targetX, y: targetY, scale: targetScale };
@@ -697,36 +912,57 @@ function drawLightTrails(ctx, w, h, hue, sat, light, amount, t, bands, feat) {
     const drive = readParamDrive();
     const beat = clamp(feat.beat || 0, 0, 1);
     const rms = clamp(feat.rms || 0, 0, 1);
-    const strands = detailCount(10 + amount * 22 + drive.scaleDepth * 5, 6, 42);
-    const steps = detailCount(52 + amount * 36, 30, 96);
+    const beams = detailCount(7 + amount * 12 + drive.scaleDepth * 4, 6, 26);
+    const steps = detailCount(90 + amount * 52, 58, 150);
     ctx.save();
     ctx.lineCap = 'round';
     ctx.globalCompositeOperation = 'lighter';
-    for (let r = 0; r < strands; r++) {
-        const k = r / Math.max(1, strands - 1);
+    for (let r = 0; r < beams; r++) {
+        const k = r / Math.max(1, beams - 1);
         const seed = hash01(r * 5.31 + drive.inversion * 7.0);
-        const lane = h * (0.14 + k * 0.72);
+        const angle = -0.55 + k * 1.10 + Math.sin(t * 0.034 + seed * 6.28) * 0.14;
+        const ca = Math.cos(angle);
+        const sa = Math.sin(angle);
+        const lane = h * (0.12 + k * 0.76);
         const band = bands[(r * 7 + 2) % bands.length] || 0;
-        const amp = h * (0.020 + band * 0.060 + rms * 0.020 + drive.temperature * 0.035 + beat * 0.015) * amount;
-        const drift = t * (0.11 + drive.equilibrium * 1.4 + seed * 0.08);
+        const amp = h * (0.018 + band * 0.048 + rms * 0.015 + drive.temperature * 0.022 + beat * 0.016) * amount;
+        const drift = t * (0.070 + drive.equilibrium * 0.70 + seed * 0.040);
         ctx.beginPath();
         for (let s = 0; s <= steps; s++) {
             const u = s / steps;
             const b = bands[(s + r * 3) % bands.length] || 0;
-            const x = w * u;
-            const curl = Math.sin(u * Math.PI * (2.0 + drive.coherence * 5.0) + drift + seed * 6.28)
-                + 0.55 * Math.sin(u * Math.PI * (6.0 + drive.scaleDepth * 5.0) - drift * 1.7 + hue * 6.0)
-                + 0.25 * Math.sin(u * Math.PI * 13.0 + t * 0.23 + b * 4.0);
-            const y = lane + curl * amp * (0.65 + b * 1.4) + Math.sin(k * 9.0 + t * 0.08) * h * 0.025 * drive.inversion;
+            const x0 = w * (u - 0.5);
+            const curl = Math.sin(u * Math.PI * (1.2 + drive.coherence * 2.2) + drift + seed * 6.28)
+                + 0.45 * Math.sin(u * Math.PI * (3.6 + drive.scaleDepth * 2.8) - drift * 1.4 + hue * 6.0)
+                + 0.16 * Math.sin(u * Math.PI * 9.0 + t * 0.18 + b * 4.0);
+            const y0 = (lane - h * 0.5) + curl * amp * (0.70 + b * 1.25);
+            const x = w * 0.5 + x0 * ca - y0 * sa * 0.72;
+            const y = h * 0.5 + x0 * sa * 0.55 + y0 * ca;
             if (s === 0) ctx.moveTo(x, y);
             else ctx.lineTo(x, y);
         }
-        ctx.strokeStyle = hsl(hue + k * 0.42 + seed * 0.12 + band * 0.10, sat, light * (0.50 + band * 0.30), (0.030 + band * 0.055 + beat * 0.028) * amount);
-        ctx.lineWidth = (0.50 + band * 2.5 + beat * 1.5 + drive.scaleDepth * 0.7) * STATE.scale;
+        ctx.strokeStyle = hsl(hue + k * 0.34 + seed * 0.16 + band * 0.12, sat * 1.06, light * (0.56 + band * 0.34), (0.028 + band * 0.062 + beat * 0.034) * amount);
+        ctx.lineWidth = (0.55 + band * 2.7 + beat * 1.7 + drive.scaleDepth * 0.55) * STATE.scale;
         ctx.stroke();
+    }
+    const nodes = detailCount(5 + amount * 7 + beat * 4, 4, 18);
+    for (let i = 0; i < nodes; i++) {
+        const seed = hash01(i * 11.13 + hue * 9.0);
+        const b = bands[(i * 9 + 5) % bands.length] || 0;
+        const x = w * (0.12 + hash01(seed * 3.0) * 0.76);
+        const y = h * (0.14 + hash01(seed * 7.0) * 0.72);
+        const rr = Math.min(w, h) * (0.012 + b * 0.025 + beat * 0.012) * amount;
+        const grad = ctx.createRadialGradient(x, y, rr * 0.06, x, y, rr * 3.4);
+        grad.addColorStop(0, hsl(hue + seed * 0.18, sat * 1.10, light * 0.90, 0.10 + b * 0.10));
+        grad.addColorStop(0.45, hsl(hue + 0.12 + seed * 0.18, sat, light * 0.55, 0.035 + b * 0.045));
+        grad.addColorStop(1, hsl(hue + 0.28 + seed * 0.10, sat, light * 0.32, 0));
+        ctx.fillStyle = grad;
+        ctx.fillRect(x - rr * 3.5, y - rr * 3.5, rr * 7, rr * 7);
     }
     ctx.restore();
 }
+
+
 
 function drawTunnel(ctx, cx, cy, rBase, hue, sat, light, amount, t, bands, feat) {
     const beat = clamp(feat.beat || 0, 0, 1);
@@ -1026,13 +1262,13 @@ function drawVisualStyle(style, ctx, w, h, cx, cy, rBase, hue, sat, light, amoun
         drawHyperspace(ctx, cx, cy, rBase * 1.25, hue, sat, light, amount, t, bands, feat);
     } else if (style === 'starfield') {
         drawStarfieldTrails(ctx, cx, cy, rBase * 1.35, hue, sat, light, amount, t, bands, feat);
-    } else if (style === 'trails') {
+    } else if (style === 'trails' || style === 'lightfield') {
         drawLightTrails(ctx, w, h, hue, sat, light, amount, t, bands, feat);
         drawStarfieldTrails(ctx, cx, cy, rBase * 1.08, hue + 0.12, sat, light, amount * 0.55, t + 4.0, bands, feat);
     } else if (style === 'entropy') {
-        drawCellularAutomata(ctx, w, h, hue, sat, light, amount * 0.72, t, bands, feat);
-        drawMoire(ctx, cx, cy, rBase * 0.95, hue + 0.1, sat, light, amount * 0.70, t, bands, feat);
-        drawRadialBars(ctx, cx, cy, rBase * 0.85, hue + 0.22, sat, light, amount * 0.55, t, bands, feat);
+        drawRibbonReactor(ctx, w, h, hue, sat, light, amount * 0.58, t, bands, feat);
+        drawSpectrumAnalyzer(ctx, w, h, hue + 0.10, sat, light, amount * 0.34, t, bands, feat);
+        drawSineField(ctx, w, h, hue + 0.18, sat, light, amount * 0.18, t + 6.0, bands, feat);
     } else if (style === 'ribbons') {
         drawRibbonReactor(ctx, w, h, hue, sat, light, amount, t, bands, feat);
     } else {
@@ -1361,7 +1597,14 @@ function gpuPoint(style, i, n, ring, t, radius, drive, bands, feat) {
         x = Math.cos(q + twist + wob) * rr + Math.cos(q * 2.0 - t * 0.12) * radius * (0.05 + audio * 0.025);
         y = Math.sin(q * 1.18 - twist * 0.55) * rr * (0.75 + band * 0.34) + Math.sin(q * 3.0 + t * 0.18) * radius * 0.035;
         z = fold * radius * (0.18 + drive.temperature * 0.08 + audio * 0.08) + Math.sin(q + ring) * radius * 0.06;
-    } else if (style === 'aurora' || style === 'entropy' || style === 'ribbons') {
+    } else if (style === 'entropy') {
+        const lane = ((ring % 10) / 9) * 2 - 1;
+        const laneWave = Math.sin(u * Math.PI * (1.6 + (ring % 4) * 0.22) + t * (0.85 + audio * 0.30) * sign + ring * 0.42);
+        const stripX = (u * 2 - 1) * radius * (1.06 + band * 0.06);
+        x = stripX + Math.sin(t * 0.16 + ring * 0.34 + u * 5.8) * radius * (0.018 + band * 0.020);
+        y = lane * radius * 0.72 + laneWave * radius * (0.050 + band * 0.085 + audio * 0.016);
+        z = Math.cos(u * Math.PI * 2.2 + ring * 0.58 + t * 0.42) * radius * (0.045 + band * 0.090 + audio * 0.018);
+    } else if (style === 'aurora' || style === 'ribbons') {
         const wave = Math.sin(a * (1.0 + ring * 0.08) + t * (0.6 + audio * 0.4) * sign);
         r *= 0.75 + wave * 0.18 + styleHash * 0.12;
         x = Math.cos(a + wave * 0.5) * r;
@@ -1522,74 +1765,69 @@ function ensureGpu2DBackdrop() {
     return true;
 }
 
-function ensureVisualEffectWorker() {
-    if (STATE.worker || STATE.workerFailed) return !!STATE.worker;
-    if (typeof Worker === 'undefined') return false;
-    try {
-        const w = new Worker(visualEffectsWorkerUrl);
-        w.onmessage = (e) => {
-            const m = e && e.data;
-            if (!m || typeof m !== 'object') return;
-            if (m.type === 'frame') {
-                STATE.workerBusy = false;
-                STATE.workerFrame = {
-                    id: m.id,
-                    segments: Math.max(0, m.segments | 0),
-                    positions: m.positions,
-                    colors: m.colors,
-                    triangles: Math.max(0, m.triangles | 0),
-                    fillPositions: m.fillPositions,
-                    fillColors: m.fillColors,
-                    arrivedAt: performance.now(),
-                };
-            } else if (m.type === 'error') {
-                STATE.workerBusy = false;
-                console.warn('[visual-effects] worker error:', m.message || m);
-            }
-        };
-        w.onerror = (err) => {
-            STATE.workerBusy = false;
-            STATE.workerFailed = true;
-            try { w.terminate(); } catch (e) { console.error(e); }
-            STATE.worker = null;
-            console.warn('[visual-effects] worker unavailable:', err && err.message ? err.message : err);
-        };
-        STATE.worker = w;
-    } catch (err) {
-        STATE.workerFailed = true;
-        console.warn('[visual-effects] worker spawn failed:', err && err.message ? err.message : err);
+function selectVisualEffectWorkerSlot(transitionUrgent, styleChanged, now) {
+    const pool = Array.isArray(STATE.workerPool) ? STATE.workerPool.filter(slot => slot && slot.worker) : [];
+    if (!pool.length) return null;
+    if (pool[0] && !pool[0].busy) return pool[0];
+    const free = pool.find(slot => !slot.busy);
+    if (free) return free;
+    let stalest = null;
+    for (const slot of pool) {
+        if (!stalest || (slot.lastRequestAt || 0) < (stalest.lastRequestAt || 0)) stalest = slot;
     }
-    return !!STATE.worker;
+    if (!stalest) return null;
+    const busyFor = now - (stalest.lastRequestAt || now);
+    const restartCooldown = now - (stalest.lastRestartAt || 0);
+    const quickRecycle = styleChanged && busyFor > 950 && restartCooldown > 900;
+    if (quickRecycle || busyFor > 1800) {
+        return recycleVisualEffectWorkerSlot(stalest, quickRecycle ? 'style-change' : 'stale-worker') ? stalest : null;
+    }
+    if (!transitionUrgent && busyFor < 260) return null;
+    return null;
 }
 
 function request2DBackdropFrame(snapshot) {
-    if (!ensureVisualEffectWorker()) return;
     const now = performance.now();
-    if (STATE.workerBusy) {
-        const busyFor = now - (STATE.workerLastRequestAt || now);
-        if (busyFor < 260) return;
-        // If an expensive backdrop style wedged the worker, recycle it instead
-        // of letting the 2D layer visually freeze on a stale frame.
-        if (busyFor > 850 && STATE.worker) {
-            try { STATE.worker.terminate(); } catch (e) { console.warn('[visual-effects] worker terminate failed:', e); }
-            STATE.worker = null;
-            STATE.workerBusy = false;
-            STATE.workerFailed = false;
-            if (!ensureVisualEffectWorker()) return;
-        } else {
-            return;
-        }
-    }
+    const styleKey = backdropRequestStyleKey(snapshot);
+    const previousStyleKey = STATE.workerRequestStyleKey;
+    const styleChanged = !!previousStyleKey && previousStyleKey !== styleKey;
+    const styleAgeMs = updateBackdropTransitionState(styleKey, now);
+    const transitionUrgent = styleAgeMs < 3200;
+    const workerTarget = desiredBackdropWorkerCount(window.S || {}, styleAgeMs);
+    if (!ensureVisualEffectWorkerPool(workerTarget)) return;
+
     const minInterval = backdropWorkerIntervalMs(window.S || {});
-    if (now - (STATE.workerLastRequestAt || 0) < minInterval) return;
-    STATE.workerBusy = true;
-    STATE.workerLastRequestAt = now;
+    const currentFrameAge = STATE.workerFrame ? Math.max(0, now - (Number(STATE.workerFrame.arrivedAt) || now)) : 9999;
+    const transitionInterval = Math.max(18, Math.min(36, minInterval * 0.72));
+    const interval = transitionUrgent ? transitionInterval : minInterval;
+    if (now - (STATE.workerLastRequestAt || 0) < interval && currentFrameAge < 160) return;
+
+    const slot = selectVisualEffectWorkerSlot(transitionUrgent, styleChanged, now);
+    if (!slot || !slot.worker) return;
+
     const id = ++STATE.workerSeq;
     const bands = new Float32Array(snapshot.bands || STATE.bands);
+    slot.busy = true;
+    slot.requestId = id;
+    slot.lastRequestAt = now;
+    slot.lastStyleKey = styleKey;
+    STATE.workerLastRequestAt = now;
+    STATE.workerBusy = true;
+    if (STATE.workerRequests && typeof STATE.workerRequests.set === 'function') {
+        STATE.workerRequests.set(id, { styleKey, requestedAt: now, workerIndex: slot.index, transition: transitionUrgent });
+        if (STATE.workerRequests.size > 96) {
+            const cutoff = now - 5000;
+            for (const [key, meta] of STATE.workerRequests.entries()) {
+                if (!meta || (meta.requestedAt || 0) < cutoff) STATE.workerRequests.delete(key);
+            }
+        }
+    }
     try {
-        STATE.worker.postMessage({ ...snapshot, id, type: 'render', bands }, [bands.buffer]);
+        slot.worker.postMessage({ ...snapshot, id, type: 'render', bands }, [bands.buffer]);
     } catch (err) {
-        STATE.workerBusy = false;
+        slot.busy = false;
+        clearWorkerRequest(id);
+        syncWorkerMirrorState();
         console.warn('[visual-effects] worker post failed:', err && err.message ? err.message : err);
     }
 }
@@ -1776,7 +2014,7 @@ function audioSurfaceAccentFactor(style, beat, t) {
     let weight = 0.26;
     if (surfaceStyles.has(s) || s === 'adaptive' || s === 'random') weight = 0.76;
     else if (gridStyles.has(s)) weight = 0.42;
-    const ribbonBase = (s === 'ribbons' || s === 'trails' || s === 'hyperspace') ? 0.18 : 0.0;
+    const ribbonBase = (s === 'ribbons' || s === 'trails' || s === 'hyperspace') ? 0.32 : s === 'starfield' ? 0.10 : 0.0;
     return clamp(ribbonBase + (duty * weight) + beatKick * (0.58 + weight * 0.36), 0, 0.94);
 }
 
@@ -1844,10 +2082,15 @@ function drawGpuFrame() {
 
     if (active2D) {
         const backdropDetail = backdropDetailScale(S);
-        const max2d = Math.max(420, Math.min(8400, Math.floor(8400 * STATE.detail * backdropDetail * backdropDetail * (1 - pressure * 0.30) * (active3D ? 0.88 : 1))));
+        const backdropStyle = String(S.visualEffect2DBackdropStyle || 'classic');
+        const backdropStyleKey = backdropRequestStyleKey({ style: chosen, backdropStyle });
+        const backdropStyleAgeMs = previewBackdropTransitionAge(backdropStyleKey, performance.now());
+        const currentFrameAgeMs = STATE.workerFrame ? Math.max(0, performance.now() - (Number(STATE.workerFrame.arrivedAt) || performance.now())) : 9999;
+        const transitionDetail = backdropTransitionDetailScale(backdropStyleAgeMs, styleBlend, currentFrameAgeMs);
+        const max2d = Math.max(420, Math.min(8400, Math.floor(8400 * STATE.detail * backdropDetail * backdropDetail * transitionDetail * (1 - pressure * 0.30) * (active3D ? 0.88 : 1))));
         request2DBackdropFrame({
             style: chosen,
-            backdropStyle: String(S.visualEffect2DBackdropStyle || 'classic'),
+            backdropStyle,
             maxSegments: max2d,
             amount,
             mix: Number(S.visualEffect2DBackdropMix ?? 1.0) || 1.0,
@@ -1888,7 +2131,7 @@ function drawGpuFrame() {
     const surfaceTarget = active2D ? rawSurfaceAccent * 0.84 : rawSurfaceAccent;
     STATE.surfaceGate = lerp(STATE.surfaceGate || 0, surfaceTarget, surfaceTarget > (STATE.surfaceGate || 0) ? 0.12 : 0.16);
     const surfaceAccent = STATE.surfaceGate;
-    if (active3D && fade3D > 0.001 && surfaceAccent > 0.10) {
+    if (active3D && fade3D > 0.001 && surfaceAccent > 0.075) {
         const maxTri = Math.max(64, Math.min(gpu.maxTriangles || 0, Math.floor((gpu.maxTriangles || 0) * STATE.detail * (1 - pressure * 0.40) * (0.34 + surfaceAccent * 0.42) * (active2D ? 0.78 : 1.0))));
         surfaceTri = drawGpuAudioSurface(gpu, chosen, radius3D * (0.68 + amount * 0.028), hue + 0.10, sat, light * 0.96, amount * (0.52 + surfaceAccent * 0.30), t, STATE.bands, feat, drive, maxTri);
     }
@@ -1901,7 +2144,7 @@ function drawGpuFrame() {
     gpu.surfaceTriangles = surfaceTri;
     if (gpu.surfaceMesh) {
         gpu.surfaceMesh.visible = surfaceTri > 0;
-        if (gpu.surfaceMesh.material) gpu.surfaceMesh.material.opacity = surfaceTri > 0 ? clamp((0.026 + amount * 0.036 + STATE.beat * 0.018) * surfaceAccent, 0.0, 0.145) : 0;
+        if (gpu.surfaceMesh.material) gpu.surfaceMesh.material.opacity = surfaceTri > 0 ? clamp((0.032 + amount * 0.046 + STATE.beat * 0.022) * surfaceAccent, 0.0, 0.18) : 0;
     }
 
     const attrPos = gpu.geometry.getAttribute('position');
