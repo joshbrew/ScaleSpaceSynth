@@ -7,9 +7,7 @@
 A Free, Open Source WebGPU phase-space visualizer / particle-based morphoscope.<br />
 Part of the [Scale Space](https://reddit.com/r/ScaleSpace) project.
 
-<img src="img/Scale-Space-Synthesist-v1.0-Screenshot.png" alt="Scale Space Synthesis" width="1024px" align="center" />
-
-*Scroll further down for more photos.*
+### THIS FORK
 
 This is a heavily optimized fork to push the framerates, improve memory/threading usage, and enables additional audiovisual fx and control with all that free CPU time. Just load a song, enable continuous randomization, and chill.
 
@@ -22,6 +20,11 @@ Music Demos (youtube compression bad):
 [https://www.youtube.com/watch?v=u9d6SfQyXR0](https://www.youtube.com/watch?v=u9d6SfQyXR0)
 
 [https://www.youtube.com/watch?v=k5BFctwdXHI&t=25s](https://www.youtube.com/watch?v=k5BFctwdXHI&t=25s)
+
+<img src="img/Scale-Space-Synthesist-v1.0-Screenshot.png" alt="Scale Space Synthesis" width="1024px" align="center" />
+
+*Scroll further down for more photos.*
+
 
 ## Build & Run
 
