@@ -28,6 +28,46 @@ export { makeButtonRow, makeSection } from './dom-ui.js';
 export const sliderSync = {};
 window.sliderSync = sliderSync;
 
+const paramSyncRegistry = {};
+const freeEnergyReadoutRegistry = new Set();
+
+function clearParamSyncRegistry() {
+    for (const key of Object.keys(paramSyncRegistry)) delete paramSyncRegistry[key];
+    for (const key of Object.keys(sliderSync)) delete sliderSync[key];
+    freeEnergyReadoutRegistry.clear();
+    window.updateAdaptiveParticleCountReadout = undefined;
+}
+
+function registerParamSync(key, fn) {
+    if (!key || typeof fn !== 'function') return;
+    if (!paramSyncRegistry[key]) {
+        paramSyncRegistry[key] = new Set();
+        sliderSync[key] = (value) => {
+            const fns = paramSyncRegistry[key];
+            if (!fns) return;
+            fns.forEach(sync => {
+                try { sync(value); } catch (err) { console.error(err); }
+            });
+        };
+    }
+    paramSyncRegistry[key].add(fn);
+}
+
+function syncParamKey(key, value) {
+    const sync = sliderSync[key];
+    if (typeof sync === 'function') sync(value);
+}
+
+function registerFreeEnergyReadout(fn) {
+    if (typeof fn !== 'function') return;
+    freeEnergyReadoutRegistry.add(fn);
+    window.updateAdaptiveParticleCountReadout = (info = {}) => {
+        freeEnergyReadoutRegistry.forEach(update => {
+            try { update(info); } catch (err) { console.error(err); }
+        });
+    };
+}
+
 	// ─── UI overlay functionality ──────────────────────────────────────────
 
 export function setupUI(engine) {
@@ -1103,7 +1143,7 @@ function makeSlider(p, label, subhead, ll, lr, key, min, max, step, cb) {
         d.insertBefore(pilotLabel, valSpan);
     }
     const inp = d.querySelector('input[type="range"]');
-    sliderSync[key] = (val) => {
+    const syncLocalSlider = (val) => {
         inp.value = val;
         // Bar pins at 0/100% — values can exceed the slider range via
         // typed entry or drag-scrub; the visualization just clamps.
@@ -1113,25 +1153,28 @@ function makeSlider(p, label, subhead, ll, lr, key, min, max, step, cb) {
         if (document.activeElement !== valSpan) {
             valSpan.textContent = fmtVal(val);
         }
-        if (cb) cb(val);
     };
+    registerParamSync(key, syncLocalSlider);
     if (key === 'freeEnergy') {
-        window.updateAdaptiveParticleCountReadout = (info = {}) => {
+        registerFreeEnergyReadout((info = {}) => {
             const active = Math.round(Number(info.active) || Number(window.S.freeEnergy) || 0);
             const requested = Math.round(Number(info.requested) || Number(window.S.freeEnergy) || 0);
+            const shown = Number(window.S.freeEnergy) || requested || active || 0;
             const scaled = info.enabled === true && active > 0 && requested > 0 && active < requested;
-            const barValue = scaled ? active : (Number(window.S.freeEnergy) || 0);
-            const rawPct = ((barValue - min) / (max - min) * 100);
+            const rawPct = ((shown - min) / (max - min) * 100);
             d.querySelector('i').style.setProperty('--v', Math.max(0, Math.min(100, rawPct)) + '%');
+            d.dataset.perfScaled = scaled ? 'true' : 'false';
+            d.title = scaled ? `Adaptive Count rendering ${fmtVal(active)} active of ${fmtVal(requested)} requested` : '';
             if (document.activeElement !== valSpan) {
-                valSpan.textContent = scaled ? `${fmtVal(active)}/${fmtVal(requested)}` : fmtVal(Number(window.S.freeEnergy) || 0);
+                valSpan.textContent = fmtVal(shown);
             }
-        };
+        });
     }
 
     const updateVal = (val, isProgrammatic = false) => {
         window.S[key] = parseFloat(val);
-        sliderSync[key](window.S[key]);
+        syncParamKey(key, window.S[key]);
+        if (cb) cb(window.S[key]);
         // Live readout toast: shows "Label: value" in the center-anchor
         // toast position so users can see the value as they scrub without
         // looking away from the simulation. Programmatic changes (state
@@ -1370,6 +1413,7 @@ function makeSelect(p, label, subhead, key, options, cb) {
 
     const valSpan = document.createElement('span');
     valSpan.className = 'val';
+    valSpan.style.display = 'none';
     const bar = document.createElement('div');
     bar.className = 'bar';
     const barFill = document.createElement('i');
@@ -1379,10 +1423,12 @@ function makeSelect(p, label, subhead, key, options, cb) {
     const select = document.createElement('select');
     select.className = 'cfg-select';
     select.style.cssText = [
-        'grid-column:1 / -1',
-        'width:100%',
+        'grid-column:2',
+        'grid-row:1',
+        'justify-self:end',
+        'width:min(170px, 100%)',
         'min-width:0',
-        'padding:5px 8px',
+        'padding:3px 8px',
         'border-radius:6px',
         'border:1px solid rgba(130,210,255,0.24)',
         'background:rgba(5,8,18,0.86)',
@@ -1398,18 +1444,18 @@ function makeSelect(p, label, subhead, key, options, cb) {
     });
 
     d.appendChild(labelEl);
+    d.appendChild(select);
     d.appendChild(valSpan);
     d.appendChild(bar);
-    d.appendChild(select);
 
     const sync = (value) => {
         const next = normalize(value);
         select.value = next;
         valSpan.textContent = labelFor(next);
-        if (cb) cb(next);
     };
-    sliderSync[key] = sync;
+    registerParamSync(key, sync);
     sync(window.S[key]);
+    if (cb) cb(normalize(window.S[key]));
 
     window._toggleUpdaters = window._toggleUpdaters || {};
     if (!window._toggleUpdaters[key]) window._toggleUpdaters[key] = new Set();
@@ -1418,9 +1464,14 @@ function makeSelect(p, label, subhead, key, options, cb) {
     select.addEventListener('change', (e) => {
         const next = normalize(e.target.value);
         window.S[key] = next;
-        sync(next);
+        syncParamKey(key, next);
+        if (cb) cb(next);
         if (window.showParamToast) window.showParamToast(label, labelFor(next));
         if (window.refreshRadialUI) window.refreshRadialUI();
+        if (window.engine && typeof window.engine.updateUniforms === 'function') {
+            try { window.engine.updateUniforms(); } catch (err) {}
+        }
+        try { window.dispatchEvent(new CustomEvent('scalespace-audio-visual-state')); } catch (err) {}
         const updaters = window._toggleUpdaters && window._toggleUpdaters[key];
         if (updaters) updaters.forEach(fn => { try { fn(); } catch (err) {} });
         try { localStorage.setItem('ss_state', JSON.stringify(window.S)) } catch (e) { }
@@ -1640,6 +1691,7 @@ const makeBtnReturn = makeBtn;
 export function buildUI(engine) {
     const pb = document.getElementById('paramsBody');
     if (!pb) return;
+    clearParamSyncRegistry();
 
     // Update Panel Titles from Config
     const T = window.APP_TEXT || { controls: {}, panels: {}, instructions: {}, quanta: {}, trails: {}, colorMode: {}, moveMode: {} };

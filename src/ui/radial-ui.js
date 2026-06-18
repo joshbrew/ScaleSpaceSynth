@@ -179,6 +179,30 @@ export function initRadialUI() {
         }
 
 
+        applyControlSideEffects(control) {
+            const key = control && control.key;
+            try {
+                if (key === 'freeEnergy' && window.engine && typeof window.engine.resizeParticles === 'function') {
+                    window.engine.resizeParticles(Math.round(Number(window.S.freeEnergy) || 0));
+                } else if (key === 'uiZoom') {
+                    document.documentElement.style.setProperty('--ui-zoom', window.S.uiZoom);
+                } else if (key === 'bgGlow') {
+                    const bg = document.getElementById('bgGlow');
+                    if (bg) bg.style.opacity = Math.min(1, Math.max(0, Number(window.S.bgGlow) || 0) * 1.5).toFixed(2);
+                } else if (key === 'bgBlur') {
+                    const bg = document.getElementById('bgGlow');
+                    if (bg) bg.style.filter = 'blur(' + (Number(window.S.bgBlur) || 0) + 'px)';
+                } else if (key === 'panelOpacity' || key === 'buttonOpacity') {
+                    if (typeof window.updatePO === 'function') window.updatePO();
+                } else if (key === 'theme' || key === 'uiScanlines' || key === 'screenScanlines') {
+                    applyTheme();
+                } else if (key === 'buttonShape') {
+                    applyButtonShape();
+                    this.relayoutNodes();
+                }
+            } catch (e) {}
+        }
+
         setValue(control, value) { 
             if (control.type === 'toggle') {
                 const wasOn = !!window.S[control.key];
@@ -221,10 +245,6 @@ export function initRadialUI() {
                 const clampFn = window.clampForBoundlessMode || ((key, v, lo, hi) => Math.max(lo, Math.min(hi, v)));
                 window.S[control.key] = clampFn(control.key, q, control.min, control.max);
 
-                if (control.key === 'uiZoom') {
-                    document.documentElement.style.setProperty('--ui-zoom', window.S[control.key]);
-                }
-
                 if (window.sliderSync && window.sliderSync[control.key]) {
                     window.sliderSync[control.key](window.S[control.key]);
                 }
@@ -249,14 +269,8 @@ export function initRadialUI() {
                 window.showParamToast(control.label || control.key, displayVal);
             }
 
-            // Side-effect hooks for keys that need follow-up beyond just updating window.S. Theme/shape changes need apply functions.
-            try {
-                if (control.key === 'theme' || control.key === 'uiScanlines' || control.key === 'screenScanlines') {
-                    applyTheme();
-                } else if (control.key === 'buttonShape') {
-                    applyButtonShape();
-                }
-            } catch (e) { /* side-effect must never break setValue */ }
+            this.applyControlSideEffects(control);
+            try { localStorage.setItem('ss_state', JSON.stringify(window.S)); } catch (e) { }
         }
 
         setModulation(control, value) {

@@ -93,6 +93,13 @@ function _injectStyle() {
     align-items: center;
     margin: 8px 0;
 }
+.audio-source-row > .audio-source-label {
+    flex: 0 0 54px;
+}
+.audio-source-row > :not(.audio-source-label) {
+    flex: 1 1 auto;
+    min-width: 0;
+}
 .audio-source-grid {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
@@ -223,6 +230,7 @@ function _injectStyle() {
     color: #9ebfe8;
     text-transform: uppercase;
     letter-spacing: 0.06em;
+    white-space: nowrap;
 }
 .audio-source-level-wrap {
     height: 5px;
@@ -582,9 +590,9 @@ export function initAudioSourceButton() {
     optsRow2.appendChild(monitorLab);
     panel.appendChild(optsRow2);
 
-    const fxRow = document.createElement('div');
-    fxRow.className = 'audio-source-row';
-    fxRow.style.gap = '6px';
+    const fxPowerRow = document.createElement('div');
+    fxPowerRow.className = 'audio-source-row';
+    fxPowerRow.style.gap = '6px';
     const fxLab = document.createElement('label');
     fxLab.className = 'audio-source-check';
     const fxToggle = document.createElement('input');
@@ -592,28 +600,20 @@ export function initAudioSourceButton() {
     fxToggle.checked = window.S.visualEffects !== false;
     fxLab.appendChild(fxToggle);
     fxLab.appendChild(document.createTextNode('Visualizer FX'));
-    const fxSelect = _mkSelect();
-    for (const { value, label } of VISUAL_EFFECT_STYLE_OPTIONS) {
-        const opt = document.createElement('option');
-        opt.value = value;
-        opt.textContent = label;
-        fxSelect.appendChild(opt);
-    }
-    fxSelect.value = window.S.visualEffectStyle || 'random';
-    fxRow.appendChild(fxLab);
-    fxRow.appendChild(fxSelect);
-    panel.appendChild(_mkRow('FX', fxRow));
+    fxPowerRow.appendChild(fxLab);
+    panel.appendChild(_mkRow('FX Power', fxPowerRow));
 
     const fx2DRow = document.createElement('div');
     fx2DRow.className = 'audio-source-row';
     fx2DRow.style.gap = '6px';
     const fx2DLab = document.createElement('label');
     fx2DLab.className = 'audio-source-check';
+    fx2DLab.style.flex = '0 0 auto';
     const fx2DToggle = document.createElement('input');
     fx2DToggle.type = 'checkbox';
     fx2DToggle.checked = (window.S.visualEffect2DBackdrop !== false) && (window.S.visualEffectBackdrop !== false);
     fx2DLab.appendChild(fx2DToggle);
-    fx2DLab.appendChild(document.createTextNode('2D backdrop'));
+    fx2DLab.appendChild(document.createTextNode('On'));
     const fx2DSelect = _mkSelect();
     for (const [value, label] of AUDIO_2D_BACKDROP_STYLE_OPTIONS.map(({ value, label }) => [value, label])){
         const opt = document.createElement('option');
@@ -628,15 +628,25 @@ export function initAudioSourceButton() {
 
     const fxLayerRow = document.createElement('div');
     fxLayerRow.className = 'audio-source-row';
-    fxLayerRow.style.justifyContent = 'space-between';
+    fxLayerRow.style.gap = '6px';
     const fx3DLab = document.createElement('label');
     fx3DLab.className = 'audio-source-check';
+    fx3DLab.style.flex = '0 0 auto';
     const fx3DToggle = document.createElement('input');
     fx3DToggle.type = 'checkbox';
     fx3DToggle.checked = (window.S.visualEffectPost !== false);
     fx3DLab.appendChild(fx3DToggle);
-    fx3DLab.appendChild(document.createTextNode('3D FX'));
+    fx3DLab.appendChild(document.createTextNode('On'));
+    const fxSelect = _mkSelect();
+    for (const { value, label } of VISUAL_EFFECT_STYLE_OPTIONS) {
+        const opt = document.createElement('option');
+        opt.value = value;
+        opt.textContent = label;
+        fxSelect.appendChild(opt);
+    }
+    fxSelect.value = window.S.visualEffectStyle || 'random';
     fxLayerRow.appendChild(fx3DLab);
+    fxLayerRow.appendChild(fxSelect);
     panel.appendChild(_mkRow('3D FX', fxLayerRow));
 
     const fx2DMix = document.createElement('input');
@@ -800,6 +810,10 @@ export function initAudioSourceButton() {
         _saveState();
         try { if (window.syncTogglesFromState) window.syncTogglesFromState(); } catch (e) {}
         try { if (window.refreshRadialUI) window.refreshRadialUI(); } catch (e) {}
+        try { window.dispatchEvent(new CustomEvent('scalespace-audio-visual-state')); } catch (e) {}
+        if (window.engine && typeof window.engine.updateUniforms === 'function') {
+            try { window.engine.updateUniforms(); } catch (e) {}
+        }
         if (window.audio) {
             if (typeof window.audio.setMuted === 'function') window.audio.setMuted(window.S.audioMuted);
             window.audio.updateVolume(window.S.volume);
