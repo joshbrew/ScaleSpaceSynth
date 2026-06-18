@@ -11,41 +11,43 @@ Part of the [Scale Space](https://reddit.com/r/ScaleSpace) project.
 
 *Scroll further down for more photos.*
 
-## Just run it
+This is a heavy optimization branch to push the framerates, improve memory/threading usage, and enables additional audiovisual fx and control. Just load a song, enable continuous randomization, and chill.
 
-[Play in the browser here](https://setzstone.github.io/ScaleSpaceSynth/dist/). No account needed, 100% free.
+Demos:
 
-[Get it on itch.io](https://setzstone.itch.io/scale-space) (early access to new features)
+[https://www.youtube.com/watch?v=gbVG4Wt_z_o](https://www.youtube.com/watch?v=gbVG4Wt_z_o)
 
-Open `dist/index.html` in a WebGPU-capable browser (Chrome / Edge / Brave / Safari 17.4+). No install required.
+[https://www.youtube.com/watch?v=u9d6SfQyXR0](https://www.youtube.com/watch?v=u9d6SfQyXR0)
 
-## Edit it (any OS, no command line)
+[https://www.youtube.com/watch?v=k5BFctwdXHI&t=25s](https://www.youtube.com/watch?v=k5BFctwdXHI&t=25s)
 
-**Windows:** double-click `1-INSTALL.bat` once, then `2-DEV-MODE.bat` to edit, `3-MAKE-BUILD.bat` to ship.
+## Build & Run
 
-**Mac:** same idea, use the `.command` files instead.
+This is not using the vite build of the original to make way for SharedArrayBuffer and more complex web worker support. It can be done but this was easier for me.
 
-Full plain-English instructions are in [`START-HERE.txt`](https://github.com/setzstone/ScaleSpaceSynth/blob/main/START-HERE.txt).
+From the same directory: `npm i -g tinybuild` then `tinybuild`
 
-## Edit it (command line)
+For newbies: 
 
-```sh
-npm install
-npm run dev      # http://localhost:5173, hot-reload on save
-npm run build    # produces dist/index.html (~1.15 MB, fully self-contained)
-```
+Download VSCode/VSCodium
 
-## What's inside
+Install NodeJS
 
-```
-src/app.js     all application code, single file
-src/app.css    all styles, single file
-index.html     panel scaffolding
-vite.config.js build config (vite-plugin-singlefile)
-dist/          generated standalone build
-```
+Download and open this repository in VSCode
 
-`src/app.js` reads top-to-bottom in seven labelled sections — `APP_TEXT`, `AudioManager`, `Atlas`, `Engine`, `RadialUI`, `UI`, `Bootstrap`. Use Ctrl+F to jump around.
+In the VSCode terminal type the above two commands, open the local server.
+
+To enable SharedArrayBuffer support you need the following headers to be sent over the server:
+
+headers:
+
+`'Cross-Origin-Opener-Policy': 'same-origin'`
+
+`'Cross-Origin-Embedder-Policy': 'require-corp'`
+
+
+Native apps require a slightly different workflow
+
 
 ## Keyboard shortcuts
 
@@ -64,8 +66,8 @@ dist/          generated standalone build
 | I / O | Inversion (compression) |
 | N / M | Scale depth (attraction force) |
 | K / L | Half-life (particle lifespan) |
-| Left-click canvas | Open Parameters radial menu |
-| Right-click canvas | Open Visuals radial menu |
+| Doouble Left-click canvas | Open Parameters radial menu |
+| Double Right-click canvas | Open Visuals radial menu |
 | Middle-click canvas | Open Config radial menu |
 
 *More controls information available in the 'Controls' panel in the application.*
@@ -196,6 +198,11 @@ All screenshots are unedited. Differences in scanlines and backgrounds come from
 
 Thoughtful PRs welcome. Discussion and shared waypoints at [/r/ScaleSpace](https://reddit.com/r/ScaleSpace).
 
+
+[Get it on itch.io](https://setzstone.itch.io/scale-space) (early access to new features)
+
+
 ## License
 
 MIT — see `LICENSE`.
+

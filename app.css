@@ -1,0 +1,2618 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box
+}
+
+:root {
+    --ui-zoom: 1.0;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+ *   DESIGN TOKENS  (added 1.2 — structural theming)
+ *   Shared chrome properties (form-field surfaces, hairline strokes, control
+ *   height) are driven by these vars so all themes are structurally identical
+ *   and differ only in values. Base `body` carries the CLASSIC (blue) values;
+ *   body[data-theme="synthesist"] overrides them (amber); the Bioclast layer
+ *   (body[data-bio="on"]) overrides them (green). One field design, one stroke
+ *   color, one control height — set per theme, consumed everywhere.
+ *
+ *   --accent-rgb        : primary theme accent (triplet, for rgba() alpha use)
+ *   --stroke-rgb        : hairline/divider/border color (triplet)
+ *   --field-bg          : form-field background (the ONE field design)
+ *   --field-border      : form-field resting border
+ *   --field-border-fc   : form-field focused border
+ *   --ctl-h             : standard control height (buttons + fields align)
+ * ────────────────────────────────────────────────────────────────────────── */
+body {
+    --accent-rgb: 80, 220, 255;
+    --stroke-rgb: 80, 220, 255;
+    --scan-rgb: 90, 210, 180;
+    --field-bg: rgba(255, 255, 255, 0.04);
+    --field-border: rgba(var(--stroke-rgb), 0.18);
+    --field-border-fc: rgba(var(--stroke-rgb), 0.45);
+    --ctl-h: 26px;
+}
+
+body {
+    background: #040410;
+    overflow: hidden;
+    font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace
+}
+
+/* ─── Global UI visibility ───────────────────────────────────────────────────
+ * Panels (already opacity:0 by default in their own rule below), dock, and
+ * hud-title all start invisible. Adding body.ui-ready fades everything in.
+ * This single class is the source of truth for "is the UI shown to the user"
+ * — used by:
+ *   • Splash dismiss (reveals UI for the first time)
+ *   • Tab keypress (toggle hide/show all UI)
+ * .panel.hidden overrides the reveal with !important so per-panel open/closed
+ * state from loadPanelPos survives both initial reveal and Tab cycles.
+ * pointer-events tied to the same gate so clicks can't reach hidden UI.
+ */
+.dock, #hud-title, #hud {
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.4s ease;
+}
+body.ui-ready .dock,
+body.ui-ready #hud-title,
+body.ui-ready #hud {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+#ui-root {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    zoom: var(--ui-zoom);
+    z-index: 10;
+}
+
+#ui-root > * {
+    pointer-events: auto;
+}
+
+.panel, .hud-element, .dock, .testbar {
+    /* Native zoom handles scaling now */
+}
+
+.dock {
+    transform-origin: bottom center;
+}
+
+#cv {
+    position: absolute;
+    inset: 0;
+    z-index: 1
+}
+
+#bgGlow {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    filter: blur(40px);
+    opacity: 0;
+    width: 100vw;
+    height: 100vh;
+    mix-blend-mode: screen;
+    transform: scale(1.1);
+}
+
+.panel {
+    position: absolute;
+    border-radius: 6px;
+    z-index: 20;
+    user-select: none;
+    /* Panel width constraints — unified to 265px default in markup, with
+     * user resize allowed within sane bounds. 220px is the practical
+     * minimum (narrower compresses sliders and toggle rows past
+     * legibility); 400px is the practical maximum (wider is just empty
+     * space since most controls are fixed-content width). The Entropy
+     * dock-button isn't a .panel so it's unaffected. */
+    min-width: 220px;
+    max-width: 400px;
+    opacity: 0;
+    pointer-events: none;
+    transition: background 0.2s, border 0.2s, box-shadow 0.2s, backdrop-filter 0.2s, opacity 0.3s ease;
+}
+
+/* While any panel is being dragged, drop the backdrop blur on all panels.
+ * The blur samples the periodic scanline overlay behind the panel; moving the
+ * panel makes that blurred sample beat between light and dark (the "flashing"
+ * during drag). No blur → nothing to beat. transition:none keeps it instant so
+ * the blur doesn't visibly fade out; it eases back in on release. */
+body.panel-dragging .panel {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    transition: none !important;
+}
+
+body.ui-ready .panel:not(.hidden) {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.panel.hidden {
+    opacity: 0 !important;
+    pointer-events: none !important;
+}
+
+.panel-head {
+    padding: 8px 12px;
+    cursor: grab;
+    border-bottom: 1px solid rgba(var(--stroke-rgb), 0.22);
+    display: flex;
+    justify-content: space-between;
+    align-items: center
+}
+
+.panel-head span {
+    font-size: 10px;
+    letter-spacing: 0.25em;
+    color: #7a9acc;
+    text-transform: uppercase
+}
+
+.panel-head .toggle {
+    cursor: pointer;
+    font-size: 14px;
+    color: #7a9acc;
+    line-height: 1;
+    padding: 0 4px
+}
+
+.panel-body {
+    padding: 10px 12px 16px;
+    max-height: min(72vh, calc(100vh - 128px));
+    overflow-y: auto;
+    transition: max-height 0.3s cubic-bezier(0.2, 0.8, 0.2, 1), padding 0.3s ease, opacity 0.3s ease;
+}
+
+.panel-body.hidden {
+    max-height: 0 !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+    opacity: 0 !important;
+    overflow: hidden;
+}
+
+/* Atlas panel runs the longest content (list of every waypoint card), so its
+ * default 72vh max-height can balloon to 1000-1500px on tall displays —
+ * disorienting and pushes other UI off-screen. Default to 500px visible; let
+ * the user drag taller (resize: vertical writes inline height which wins over
+ * this default) up to 90vh so it always fits on screen. */
+#panelAtlas .panel-body {
+    height: 500px;
+    max-height: min(72vh, calc(100vh - 128px));
+}
+
+/* Atlas footer sits OUTSIDE the scrolling .panel-body so the scrollbar
+ * doesn't push it horizontally and so it can extend edge-to-edge of the
+ * panel without the dark backdrop that previously masked scrolled content
+ * underneath. Now the footer is a normal block element below the scroll
+ * area — no positioning gymnastics needed. */
+#atlasFooter {
+    padding: 8px 12px 12px;
+    border-top: 1px solid rgba(120, 120, 180, 0.18);
+}
+#atlasFooter:empty {
+    display: none;
+}
+
+/* Bottom-spacing parity: the standard scrolling panels (Params, Optics,
+ * Config/Settings) should end with the same 12px bottom gap that Atlas gets
+ * from its footer — not the base 16px body padding, which (stacked with the
+ * last section's own margin) left an oversized gap, most visibly in Optics.
+ * Trimming the trailing section margin to 0 removes the extra gap so the last
+ * control sits a clean 12px from the panel edge. */
+#paramsBody, #settingsBody, #configBody {
+    padding-bottom: 12px;
+}
+#paramsBody > .section:last-child,
+#settingsBody > .section:last-child,
+#configBody > .section:last-child,
+#paramsBody > .cfg-pane > .section:last-child,
+#settingsBody > .cfg-pane > .section:last-child,
+#configBody > .cfg-pane > .section:last-child {
+    margin-bottom: 0;
+}
+
+/* Section header for panel groupings. Two-part: white headline on the
+ * left, optional muted subhead inline-right on the same line. Matches the
+ * Share Coordinates pattern (where the subhead is a live char count)
+ * applied universally. Saves vertical space, reads as one cohesive unit
+ * rather than a stacked label+description, and gives the panel a
+ * cleaner rhythm.
+ *
+ * align-items:baseline aligns the headline and subhead by their text
+ * baselines so different font sizes don't visually shift relative to
+ * each other. */
+.section {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    /* flex-start, not baseline — baseline alignment causes the head to
+     * shift its rendered position relative to the sub when the sub wraps
+     * to a new line, which produced the "text hangs into the panel margin"
+     * glitch in narrower panes. flex-start keeps both anchored to the
+     * left edge cleanly. */
+    align-items: flex-start;
+    column-gap: 8px;
+    row-gap: 2px;
+    margin-top: 16px;
+    margin-bottom: 4px;
+}
+/* First section in a config pane shouldn't stack its 16px top margin on top
+ * of the pane's own top padding — that produced an oversized gap above the
+ * first header (Save Screenshot / Callsign). */
+.cfg-pane > .section:first-child { margin-top: 2px; }
+.section .section-head {
+    color: #d9edf6;
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    /* Head never shrinks — keep the title intact. If the sub can't fit
+     * on the same line (narrower panes like .cfg-pane with longer subs),
+     * the sub wraps to a new row below, still left-aligned. Prevents the
+     * default flex behavior of making the two children share the row as
+     * pseudo-columns. */
+    flex: 0 0 auto;
+}
+.section .section-sub {
+    color: #718a99;
+    font-size: 8px;
+    /* When the row wraps, sub starts on its own line — width:100% pins
+     * it to the left edge instead of inheriting its inline width. The
+     * small top offset compensates for the smaller font landing higher
+     * within the flex line than the head, visually aligning the bottoms. */
+    flex: 0 1 auto;
+    align-self: flex-end;
+    padding-bottom: 1px;
+}
+/* First-of-pane sections don't need the top spacing — the panel-body
+ * padding already provides it. */
+.panel-body > .section:first-child {
+    margin-top: 2px;
+}
+
+/* (Former .subsection class removed — its role is now handled by the
+ * section-sub span inside .section. Section's two-element pattern covers
+ * both top-of-group and group-of-controls hierarchies cleanly.) */
+
+.slider-row {
+    margin-bottom: 12px
+}
+
+.slider-labels {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 2px
+}
+
+.slider-labels .l,
+.slider-labels .r {
+    font-size: 8px;
+    letter-spacing: 0.08em;
+    color: #8899aa;
+    text-transform: uppercase
+}
+
+.slider-labels .c {
+    font-size: 9px;
+    letter-spacing: 0.06em;
+    font-weight: 600
+}
+
+.row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    /* Spacing unified with the cymatics sliders: 10px horizontal between
+     * label and val (column gap), 4px vertical between the label row and the
+     * bar (row gap), 10px below each slider. (Previously 3px / 14px.) */
+    column-gap: 10px;
+    row-gap: 4px;
+    margin-bottom: 10px;
+    font-size: 11px;
+    position: relative;
+}
+.row[data-audio-pilot-row="1"] {
+    grid-template-columns: 1fr auto auto;
+}
+.audio-pilot-toggle {
+    justify-self: end;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    margin-right: -4px;
+    opacity: 0.76;
+}
+.audio-pilot-toggle input {
+    width: 11px;
+    height: 11px;
+    margin: 0;
+    accent-color: #6dffb0;
+    cursor: pointer;
+}
+.audio-pilot-toggle:hover {
+    opacity: 1;
+}
+.section.audio-pilot-section {
+    width: 100%;
+}
+.section.audio-pilot-section .audio-pilot-toggle {
+    margin-left: auto;
+    margin-right: 0;
+    padding-top: 1px;
+}
+
+.row .label {
+    /* Inline label + subhead pattern, matching .section. Horizontal flex
+     * with baseline alignment so the bigger headline text and smaller
+     * subhead text sit on the same line. Saves vertical space; reads as
+     * one cohesive unit. Old stacked column layout meant every slider
+     * with a subhead took two rows of vertical real estate. */
+    color: #d9edf6;
+    display: flex;
+    flex-direction: row;
+    align-items: baseline;
+    gap: 8px;
+}
+.row .subhead { color: #718a99; font-size: 8px; margin-top: 2px; }
+.row .val { 
+    color: #6dffb0;
+    font-variant-numeric: tabular-nums; 
+    font-size: 11px; 
+    text-shadow: 0 0 8px rgba(109, 255, 176, 0.4);
+}
+/* Editable / scrubbable value field.
+ * - ew-resize on hover signals horizontal drag-scrub (Unreal-style).
+ * - .scrubbing class is added during an active drag.
+ * - contenteditable="true" is set transiently when the user click-focuses;
+ *   the [contenteditable="true"] selector gives the focused state a subtle
+ *   ring + neutral cursor so users see they're in edit mode.
+ * No outline on focus — would compete with the modulation pulse animation
+ * applied at the .row level via data-modulating. */
+.row .val[data-editable="1"] {
+    cursor: ew-resize;
+    /* Always-visible box — these are editable fields, so they read as fields
+     * at rest (per setz). Token-driven so all three themes match. justify-self
+     * keeps the box hugging its content at the right edge instead of stretching
+     * into the bar's column. */
+    justify-self: end;
+    background: var(--field-bg);
+    border: 1px solid var(--field-border);
+    /* Color-coded left edge keys the value to its slider — applied to every
+     * draggable value box for a consistent, intentional look (per setz). */
+    border-left: 3px solid currentColor;
+    padding: 1px 5px;
+    border-radius: 3px;
+    transition: background 120ms ease, border-color 120ms ease;
+}
+.row .val[data-editable="1"]:hover {
+    background: rgba(var(--accent-rgb), 0.12);
+    border-color: var(--field-border-fc);
+}
+.row .val.scrubbing {
+    background: rgba(var(--accent-rgb), 0.16);
+    border-color: var(--field-border-fc);
+    cursor: ew-resize;
+}
+.row .val[contenteditable="true"] {
+    cursor: text;
+    background: rgba(8, 8, 16, 0.7);
+    outline: 1px solid var(--field-border-fc);
+    caret-color: currentColor;
+}
+
+/* ─── Unbound indicator ──────────────────────────────────────────────────
+ * A ghosted "broken chain" glyph sits just left of a slider's value to show
+ * the value can escape its slider range. Only appears while Unbound mode is
+ * active (body.boundless) and only on rows flagged data-unboundable in
+ * makeSlider — chrome/appearance sliders stay clamped, so they never get the
+ * mark. Purely informational; pointer-events:none so it can't intercept the
+ * click-to-edit / drag-scrub on the value. */
+body.boundless .row[data-unboundable="1"] .val::before {
+    content: '';
+    display: inline-block;
+    width: 11px;
+    height: 11px;
+    margin-right: 4px;
+    vertical-align: middle;
+    opacity: 0.4;
+    /* Mask + currentColor so the glyph inherits the themed value color
+     * (green in Bioclast, pink in synthesist, etc.) instead of a fixed
+     * white that read as off-theme. */
+    background-color: currentColor;
+    -webkit-mask: no-repeat center / contain url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9.5 8H7a4 4 0 0 0 0 8h2.5'/%3E%3Cpath d='M14.5 8H17a4 4 0 0 1 0 8h-2.5'/%3E%3Cline x1='5' y1='19' x2='19' y2='5'/%3E%3C/svg%3E");
+    mask: no-repeat center / contain url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9.5 8H7a4 4 0 0 0 0 8h2.5'/%3E%3Cpath d='M14.5 8H17a4 4 0 0 1 0 8h-2.5'/%3E%3Cline x1='5' y1='19' x2='19' y2='5'/%3E%3C/svg%3E");
+    pointer-events: none;
+}
+
+.bar { 
+    grid-column: 1 / -1; 
+    height: 7px; 
+    overflow: hidden; 
+    border-radius: 2px; 
+    background: rgba(217,237,246,0.08); 
+    position: relative;
+}
+
+.bar i { 
+    display: block; 
+    width: var(--v, 50%); 
+    height: 100%; 
+    background: linear-gradient(90deg, #0d3b4a, #6dffb0); 
+    pointer-events: none;
+    position: relative;
+}
+
+.row input[type=range] {
+    position: absolute;
+    bottom: -5px;
+    left: 0;
+    width: 100%;
+    height: 15px; /* Cover the bar area for easy dragging */
+    margin: 0;
+    opacity: 0; /* Invisible but clickable */
+    cursor: pointer;
+    z-index: 10;
+}
+
+/* Short buttons (.tog and .btn) — used throughout panels for toggles like
+ * "Save Screenshot on Capture" and actions like "Reset Params" / "Save" /
+ * "Load". Match .dock-btn exactly: same padding, border-radius, font-size,
+ * and hover treatment, so a panel button and a dock button read as the
+ * same UI vocabulary. Color of the border/text is what differentiates
+ * idle (muted) from the dock's "lit" state. */
+.tog {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    padding: 6px 10px;
+    margin: 0 6px 6px 0;
+    border-radius: 6px;
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
+    line-height: 1;
+    transition: background 200ms ease, border-color 200ms ease, color 200ms ease, box-shadow 200ms ease;
+}
+
+.tog .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%
+}
+
+.btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    padding: 6px 10px;
+    margin: 0 6px 6px 0;
+    /* bg/border alphas multiply --btn-alpha so the panel buttons fade with
+     * the Button Opacity slider while their text stays at full opacity —
+     * matches the radial/dock-btn behavior. */
+    background: rgba(255, 255, 255, calc(0.04 * var(--btn-alpha, 1)));
+    border: 1px solid rgba(255, 255, 255, calc(0.07 * var(--btn-alpha, 1)));
+    color: #8a9aaa;
+    border-radius: 6px;
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
+    line-height: 1;
+    transition: background 200ms ease, border-color 200ms ease, color 200ms ease, box-shadow 200ms ease;
+}
+
+.btn:hover {
+    border-color: rgba(80, 220, 255, calc(0.45 * var(--btn-alpha, 1)));
+    color: #cce6ff;
+    background: rgba(80, 220, 255, calc(0.06 * var(--btn-alpha, 1)));
+}
+body[data-theme="synthesist"] .btn:hover {
+    border-color: rgba(255, 170, 85, calc(0.5 * var(--btn-alpha, 1)));
+    color: #ffe0c8;
+    background: rgba(255, 170, 85, calc(0.08 * var(--btn-alpha, 1)));
+}
+
+#hud {
+    position: fixed;
+    bottom: 30px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 8px;
+    letter-spacing: .2em;
+    color: #6a7a8a;
+    pointer-events: none;
+    z-index: 10;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
+    transition: opacity 0.3s ease;
+}
+
+#hud.hidden, #dock.hidden {
+    opacity: 0 !important;
+    pointer-events: none !important;
+}
+
+.hud-element {
+    pointer-events: auto;
+    cursor: grab;
+    position: absolute;
+}
+
+#hud-title {
+    /* Position is now driven by JS in initLogo() — written as inline
+     * left/top relative to the dock's current screen position. The CSS
+     * only provides initial styling and the connector pseudo-element. */
+    position: absolute;
+    color: #8ab4e0;
+    letter-spacing: 0.3em;
+    font-weight: 600;
+    font-size: 12px;
+    z-index: 15;
+    pointer-events: auto;
+    cursor: grab;
+    transition: opacity 0.3s ease;
+}
+
+/* .docked — applied when the logo is positioned relative to the dock
+ * (whether by default or by snapping back via the snap logic). A thin
+ * horizontal rule between logo and dock fades in to signal the
+ * relationship. .dock-below flips the rule to render above the logo when
+ * the dock is positioned above the logo (e.g. dock dragged to top of
+ * viewport). Stroke color is currentColor so it inherits the theme tint
+ * naturally — no separate theme overrides needed. */
+#hud-title.docked::after {
+    content: '';
+    position: absolute;
+    /* Default: rule sits below the logo (logo above dock case). */
+    top: 100%;
+    bottom: auto;
+    left: 50%;
+    transform: translateX(-50%);
+    margin-top: 6px;
+    width: 120%;
+    height: 1px;
+    background: linear-gradient(90deg, transparent 0%, currentColor 50%, transparent 100%);
+    opacity: 0.55;
+    transition: opacity 250ms ease;
+    pointer-events: none;
+}
+#hud-title.docked.dock-below::after {
+    /* Logo below dock case — rule sits above the logo, anchored to top
+     * of the element rather than bottom. */
+    top: auto;
+    bottom: 100%;
+    margin-top: 0;
+    margin-bottom: 6px;
+}
+#hud-title:not(.docked)::after {
+    opacity: 0;
+}
+/* Mouse-distance fade rule removed — the JS handler that added .distant
+ * was deleted because the dim-when-far behavior made the logo feel
+ * unstable during normal navigation. */
+
+#hud-title.hidden {
+    opacity: 0 !important;
+}
+
+/* Free-floating logo (lifted out of the dock by initLogo). */
+#hud-title.logo-svg { line-height: 0; color: #fff; }
+#hud-title.logo-svg svg { width: 200px; height: auto; display: block; }
+#hud-title:active { cursor: grabbing; }
+
+#hint {
+    position: absolute;
+    bottom: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 8px;
+    color: #5a7090;
+    z-index: 15;
+    letter-spacing: 0.1em;
+    pointer-events: none
+}
+
+.wp-card {
+    background: transparent;
+    border: 1px solid rgba(30, 30, 60, 0.5);
+    border-radius: 4px;
+    margin-bottom: 6px;
+    overflow: hidden;
+    transition: border-color .2s
+}
+
+.wp-card:hover {
+    border-color: rgba(80, 100, 160, 0.5)
+}
+
+.wp-row {
+    display: flex;
+    gap: 8px;
+    padding: 6px;
+    align-items: center
+}
+
+.wp-thumb {
+    width: 52px;
+    height: 34px;
+    border-radius: 2px;
+    background: #111;
+    flex-shrink: 0;
+    object-fit: cover
+}
+
+.wp-name {
+    font-size: 9px;
+    color: #8ab8e8;
+    letter-spacing: .04em;
+    flex: 1;
+    cursor: pointer
+}
+body[data-theme="synthesist"] .wp-name {
+    color: #ffaa55;
+}
+/* Delete-modal waypoint name display — quoted name inside the
+ * confirmation dialog. Theme-tinted so it doesn't clash with synthesist. */
+.modal-name {
+    color: #8ab8e8;
+}
+body[data-theme="synthesist"] .modal-name {
+    color: #ffaa55;
+}
+
+.wp-name:hover {
+    text-decoration: underline
+}
+
+.wp-actions {
+    display: flex;
+    gap: 3px;
+    flex-shrink: 0
+}
+
+.wp-btn-sm {
+    width: 22px;
+    height: 22px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(10, 10, 24, 0.6);
+    border: 1px solid rgba(40, 40, 70, 0.5);
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 10px;
+    transition: border-color .2s
+}
+
+.wp-btn-sm:hover {
+    border-color: rgba(100, 120, 180, 0.5)
+}
+
+.wp-edit {
+    background: var(--field-bg);
+    border: 1px solid var(--field-border);
+    color: #bbccdd;
+    font-family: inherit;
+    font-size: 9px;
+    width: 100%;
+    outline: none;
+    padding: 4px 6px;
+    border-radius: 4px;
+    letter-spacing: .03em;
+    line-height: 1.2;
+    box-sizing: border-box;
+    transition: background 120ms ease, border-color 120ms ease;
+}
+/* Single-line inputs: normal line-height renders bottom-heavy in a padded
+ * box; equalize by letting the line fill and centering via the padding. */
+input.wp-edit { line-height: normal; }
+textarea.wp-edit, .wp-edit.wp-notes-area { resize: vertical; line-height: 1.5; }
+
+.wp-edit:focus {
+    border-color: var(--field-border-fc);
+    color: #ddeeff
+}
+
+.wp-edit::placeholder {
+    color: #5a6a7a
+}
+
+.wp-meta {
+    font-size: 8px;
+    color: #6a7a8a;
+    margin-top: 4px;
+    letter-spacing: .04em
+}
+
+.cat-head {
+    font-size: 8px;
+    letter-spacing: .12em;
+    color: #8899aa;
+    text-transform: uppercase;
+    padding: 8px 0 4px;
+    cursor: pointer;
+    display: flex;
+    justify-content: space-between;
+    align-items: center
+}
+
+.cat-head:hover {
+    color: #aabbcc
+}
+
+.modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(4, 4, 16, .85);
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    justify-content: center
+}
+
+.modal-box {
+    background: #0c0c1f;
+    border: 1px solid #3a3a6a;
+    border-radius: 8px;
+    padding: 24px;
+    max-width: 320px;
+    text-align: center
+}
+
+.modal-box p {
+    font-size: 10px;
+    color: #bbccdd;
+    margin-bottom: 16px;
+    letter-spacing: .04em;
+    line-height: 1.6
+}
+
+.modal-btn {
+    padding: 6px 16px;
+    border-radius: 3px;
+    font-family: inherit;
+    font-size: 9px;
+    letter-spacing: .08em;
+    cursor: pointer;
+    border: 1px solid;
+    margin: 0 5px;
+    text-transform: uppercase;
+    background: transparent
+}
+
+.travel-indicator {
+    position: fixed;
+    bottom: 36px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 10px;
+    color: #7a9acc;
+    letter-spacing: .2em;
+    text-transform: uppercase;
+    z-index: 30;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity .5s
+}
+
+.travel-indicator.show {
+    opacity: 1
+}
+
+.flash {
+    position: fixed;
+    inset: 0;
+    background: rgba(100, 150, 255, .12);
+    z-index: 50;
+    pointer-events: none;
+    animation: flashAnim .4s ease-out forwards
+}
+
+@keyframes flashAnim {
+    0% {
+        opacity: 1
+    }
+
+    100% {
+        opacity: 0
+    }
+}
+
+@keyframes fadeN {
+
+    0%,
+    70% {
+        opacity: 1;
+        transform: translate(-50%, 0);
+    }
+
+    100% {
+        opacity: 0;
+        transform: translate(-50%, -10px);
+    }
+}
+
+/* Scrollbars — wide enough to grab comfortably (6px) with theme-aware
+ * hover/active coloring. The thumb is muted at rest so it doesn't compete
+ * with content, but lights up in the active theme color when the user
+ * actually interacts with it. Tracks stay transparent so the scrollbar
+ * column doesn't draw a visible gutter against the panel background. */
+div::-webkit-scrollbar {
+    width: 6px
+}
+
+div::-webkit-scrollbar-track {
+    background: transparent
+}
+
+div::-webkit-scrollbar-thumb {
+    background: rgba(var(--stroke-rgb), 0.35);
+    border-radius: 3px;
+    transition: background 160ms ease;
+}
+div::-webkit-scrollbar-thumb:hover {
+    background: rgba(var(--stroke-rgb), 0.6);
+}
+div::-webkit-scrollbar-thumb:active {
+    background: rgba(var(--stroke-rgb), 0.85);
+}
+
+/* Firefox equivalent — no per-state selectors so we get one accent color
+ * for both hover and active. Width "thin" is roughly 8px in Firefox; close
+ * enough to our 6px webkit value to feel consistent across browsers. */
+* {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(var(--stroke-rgb), 0.5) transparent;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+ *   THEME: SYNTHESIST  (active when body[data-theme="synthesist"])
+ *   Amber/orange primary with magenta/violet highlights — distinct from
+ *   the classic cyan/green palette so users can tell at a glance which
+ *   tool they're in.
+ * ────────────────────────────────────────────────────────────────────────── */
+
+body[data-theme="synthesist"] {
+    --accent-rgb: 255, 170, 85;
+    --stroke-rgb: 255, 170, 85;
+    --scan-rgb: 255, 200, 130;
+    --field-bg: rgba(255, 170, 85, 0.05);
+    --field-border: rgba(255, 170, 85, 0.18);
+    --field-border-fc: rgba(255, 170, 85, 0.45);
+}
+
+body[data-theme="synthesist"] .panel-head span {
+    color: #ffaa55;
+}
+body[data-theme="synthesist"] .panel-head .toggle {
+    color: #ffaa55;
+}
+body[data-theme="synthesist"] .row .val {
+    color: #ff79c6;
+    text-shadow: 0 0 8px rgba(255, 121, 198, 0.4);
+}
+/* box bg/border now come from the field tokens (set per theme) — no per-theme
+ * hover/scrubbing overrides needed. */
+body[data-theme="synthesist"] .row .val[contenteditable="true"] {
+    outline-color: rgba(255, 121, 198, 0.5);
+    caret-color: #ff79c6;
+}
+body[data-theme="synthesist"] .bar i {
+    background: linear-gradient(90deg, #5a2438, #ffaa55);
+}
+body[data-theme="synthesist"] .row .label {
+    color: #f0e0d0;
+}
+body[data-theme="synthesist"] .row .subhead {
+    color: #b08070;
+}
+body[data-theme="synthesist"] .section .section-head {
+    color: #f0e0d0;
+}
+body[data-theme="synthesist"] .section .section-sub {
+    /* Match the slider .row .subhead color (#b08070) rather than the
+     * brighter cc9966 — keeps subhead intensity uniform across the panel,
+     * so Quanta/Trails/Color Mode/Save Screenshot read at the same visual
+     * weight as Color Range/Saturation. */
+    color: #b08070;
+}
+body[data-theme="synthesist"] #hud-title {
+    color: #ffb874;
+    text-shadow: 0 0 12px rgba(255, 184, 116, 0.4);
+}
+body[data-theme="synthesist"] #hud {
+    color: #b89070;
+}
+body[data-theme="synthesist"] .panel {
+    border-color: rgba(80, 50, 30, 0.55);
+    box-shadow: 0 0 20px rgba(255, 121, 198, 0.06), inset 0 1px 0 rgba(255, 170, 85, 0.05);
+}
+body[data-theme="synthesist"] .wp-name {
+    color: #ffaa55;
+}
+body[data-theme="synthesist"] .wp-card:hover {
+    border-color: rgba(255, 121, 198, 0.45);
+}
+body[data-theme="synthesist"] .btn:hover {
+    border-color: rgba(255, 170, 85, 0.55);
+}
+
+/* Synthesist neon-pulse on slider tracks (subtle, only on the bar fill) */
+@keyframes synthPulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.78; }
+}
+body[data-theme="synthesist"] .bar i {
+    /* No always-on pulse — only genuinely modulated rows animate, via the
+     * data-modulating hook below. (Removed synthPulse: it made every slider
+     * breathe, which read as "tempo is modulating" even at 0% mod.) */
+}
+
+/* Modulation indicator — slider tracks pulse faster when modulation is
+ * active. Hooked via a `data-modulating="true"` attribute on the row that
+ * the modulation pipeline can set.  */
+.row[data-modulating="true"] .bar i {
+    animation: modPulse 1.4s ease-in-out infinite !important;
+    box-shadow: 0 0 8px currentColor;
+}
+@keyframes modPulse {
+    0%, 100% { opacity: 1; transform: scaleY(1); }
+    50%      { opacity: 0.7; transform: scaleY(1.4); }
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+ *   SCANLINES  (driven by --ui-scan and --screen-scan CSS vars)
+ *   Approach: an inline SVG pattern as background-image with a hard-snapped
+ *   2px tile (1px line + 1px gap). This gives PERFECTLY UNIFORM rendering
+ *   regardless of element position or backdrop-filter underneath, because
+ *   SVG is exact-pixel rather than anti-aliased gradient stops. We also
+ *   drop mix-blend-mode (the diagonal artifacts you were seeing came from
+ *   blend-screen interacting with backdrop-filter blur).
+ * ────────────────────────────────────────────────────────────────────────── */
+
+.panel::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    /* Two-tone scanline. The tile height is --scan-px (set from JS as
+     * 2/devicePixelRatio css-px) so it always renders ~2 PHYSICAL pixels
+     * regardless of browser zoom — browser zoom scales css-px, and dpr scales
+     * with zoom, so dividing by dpr cancels it out. The gradient stops use the
+     * same var via calc so the line/gap stay 1 physical px each. */
+    background-image: repeating-linear-gradient(
+        to bottom,
+        rgba(var(--scan-rgb), 0.55) 0,
+        rgba(var(--scan-rgb), 0.55) calc(var(--scan-px, 2px) / 2),
+        rgba(0, 0, 0, 0.25) calc(var(--scan-px, 2px) / 2),
+        rgba(0, 0, 0, 0.25) var(--scan-px, 2px)
+    );
+    background-size: 100% var(--scan-px, 2px);
+    background-position: 0 0;
+    background-repeat: repeat;
+    border-radius: inherit;
+    z-index: 1;
+    opacity: var(--ui-scan, 0);
+}
+.panel-body, .panel-head {
+    position: relative;
+    z-index: 2;
+}
+
+/* Screen scanlines — full-viewport overlay above canvas, below UI panels */
+body::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    background-image: repeating-linear-gradient(
+        to bottom,
+        rgba(var(--scan-rgb), 0.55) 0,
+        rgba(var(--scan-rgb), 0.55) calc(var(--scan-px, 2px) / 2),
+        rgba(0, 0, 0, 0.25) calc(var(--scan-px, 2px) / 2),
+        rgba(0, 0, 0, 0.25) var(--scan-px, 2px)
+    );
+    background-size: 100% var(--scan-px, 2px);
+    z-index: 5;
+    opacity: var(--screen-scan, 0);
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * RADIALS
+ * ────────────────────────────────────────────────────────────────────────── */
+
+    .radial {
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 280ms ease;
+      zoom: var(--ui-zoom, 1.0);
+    }
+    .radial.open { opacity: 1; }
+    
+    .band {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 0;
+      height: 2px;
+      transform-origin: left center;
+      background: linear-gradient(90deg, rgba(255,255,255,0), rgba(255,255,255,0.7));
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 80ms ease;
+    }
+
+    .radial-node {
+      position: absolute;
+      width: 78px;
+      height: 68px;
+      display: grid;
+      place-items: center;
+      padding: 0px;
+      border: none;
+      background: none;
+      color: #fff;
+      font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
+      text-align: center;
+      opacity: 0;
+      z-index: 110;
+      pointer-events: none;
+      transform: translate(-50%, -50%);
+      transition: opacity 250ms ease, left 300ms ease, top 300ms ease;
+    }
+
+    /* The hexagon FILL — a clipped, blurred gradient. Lives as its own child
+     * (a SIBLING of the stroke SVG) so the clip-path only affects the fill and
+     * never the stroke. This is what fixed the perennial "stroke clipped /
+     * uneven / disappears" bug: fill and stroke are separate siblings, each the
+     * full node box; only the fill is clipped. */
+    .hex-fill {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 78px;
+      height: 68px;
+      clip-path: polygon(27.5% 3%, 72.5% 3%, 97% 50%, 72.5% 97%, 27.5% 97%, 3% 50%);
+      background: linear-gradient(180deg, rgb(12 12 31 / var(--btn-bg-top, 0.88)), rgb(8 8 26 / var(--btn-bg-bot, 0.8)));
+      transition: background 160ms ease;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .radial.open .radial-node {
+      opacity: 1;
+      transform: translate(-50%, -50%);
+      pointer-events: auto;
+      transition-delay: var(--delay, 0ms);
+    }
+    .radial.closing .radial-node {
+      opacity: 0;
+      transform: translate(-50%, -50%);
+      transition-delay: var(--delay, 0ms);
+    }
+    
+    .radial.open .radial-node.empty-slot {
+      opacity: 0;
+      pointer-events: none;
+    }
+    .radial.dragging-reorder .radial-node.empty-slot {
+      opacity: 0.4;
+      z-index: 100;
+    }
+
+    /* hex-stroke-wrap: the hexagon OUTLINE. A sibling of .hex-fill (not a child
+     * of a clipped element), so it renders its full, even stroke on all sides.
+     * Sits above the fill via z-index. */
+    .hex-stroke-wrap {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 78px;
+      height: 68px;
+      pointer-events: none;
+      z-index: 1;
+    }
+    .hex-stroke-wrap svg {
+      width: 78px;
+      height: 68px;
+      overflow: visible;
+    }
+    .hex-stroke-wrap polygon {
+      fill: none;
+      stroke: rgba(120, 175, 230, 0.6);
+      stroke-width: 1.5;
+      transition: stroke 160ms ease, filter 160ms ease, stroke-width 160ms ease;
+    }
+    .radial-node:hover:not(.empty-slot) .hex-stroke-wrap polygon {
+      stroke: #50dcff;
+      stroke-width: 1.5;
+      filter: drop-shadow(0 0 3px #50dcff);
+    }
+    .radial-node.active:not(.empty-slot) .hex-stroke-wrap polygon {
+      stroke: #50dcff;
+      stroke-width: 2;
+      filter: drop-shadow(0 0 6px #50dcff);
+    }
+    .radial-node.drop-target .hex-stroke-wrap polygon {
+      stroke: rgba(255, 255, 255, 0.9);
+      stroke-width: 2;
+      filter: drop-shadow(0 0 6px rgba(255,255,255,0.6));
+    }
+    .radial-node.empty-slot .hex-stroke-wrap polygon {
+      stroke-dasharray: 4 4;
+      stroke: rgba(255, 255, 255, 0.3);
+      stroke-width: 1;
+    }
+    .radial-node.empty-slot .hex-fill { background: transparent; backdrop-filter: none; -webkit-backdrop-filter: none; }
+    .radial-node.active { z-index: 200; cursor: grabbing;
+      filter: drop-shadow(0 6px 14px rgba(0,0,0,0.5)); }
+    .radial-node.active .hex-fill {
+      background: linear-gradient(180deg, rgba(30,36,50,0.94), rgba(10,10,24,0.90)); }
+    .radial-node.reorder-active { z-index: 200; cursor: grabbing;
+      filter: drop-shadow(0 8px 20px rgba(0,0,0,0.6)); }
+    .radial-node.reorder-active .hex-fill {
+      background: linear-gradient(180deg, rgba(40,50,70,0.95), rgba(10,10,24,0.92)); }
+    .radial.dragging .radial-node.active span { opacity: 0; }
+    .radial.dragging .radial-node:not(.active),
+    .radial.dragging-reorder .radial-node:not(.active):not(.drop-target):not(.reorder-ghost) { opacity: 0.15 !important; pointer-events: none; }
+    .radial.dragging-reorder .radial-node.drop-target { opacity: 1 !important; pointer-events: none; }
+    .radial.dragging-reorder .radial-node.reorder-ghost { opacity: 1 !important; pointer-events: none; }
+    .radial.clicked .radial-node:not(.active) { opacity: 0.5; }
+    .radial.closing .radial-node { opacity: 0; transition-delay: 0ms; }
+    .radial-node:not(.empty-slot) { cursor: pointer; }
+    .radial-node:hover:not(.empty-slot) { z-index: 150; }
+
+    /* Ghost placeholder shown at drag source during reorder */
+    .radial-node.reorder-ghost {
+      background: transparent;
+      cursor: default;
+    }
+    .radial-node.reorder-ghost .hex-fill { background: transparent; backdrop-filter: none; -webkit-backdrop-filter: none; }
+    .radial-node.reorder-ghost .hex-stroke-wrap polygon {
+      stroke-dasharray: 5 4;
+      stroke: rgba(255,255,255,0.4);
+      stroke-width: 1;
+      filter: none;
+    }
+
+    .radial-node span { 
+      position: relative;
+      z-index: 2;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      box-sizing: border-box;
+      padding: 0 4px;
+      transition: opacity 120ms ease; 
+      pointer-events: none; 
+    }
+    .radial-node strong {
+      color: #fff;
+      font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
+      font-size: 7px;
+      font-weight: 800;
+      line-height: 1.2;
+      text-transform: uppercase;
+      letter-spacing: 0.02em;
+      white-space: normal;
+      word-break: normal;
+      overflow-wrap: break-word;
+      max-width: 100%;
+    }
+    .radial-node em { display: none; }
+
+    .radial-node:hover:not(.empty-slot) { z-index: 150; }
+
+    .readout {
+      position: absolute;
+      left: var(--origin-x, 50%);
+      top: var(--origin-y, 50%);
+      width: 220px;
+      height: 144px;
+      margin: 0;
+      z-index: 102;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: transparent;
+      color: #fff;
+      transform: translate(-50%, -50%);
+      opacity: 0;
+      transition: opacity 140ms ease;
+      pointer-events: none;
+    }
+    .readout.visible, .radial.dragging .readout { opacity: 1; }
+    
+    .readout-content {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        width: 100%;
+        text-align: center;
+        position: relative;
+    }
+
+    .readout strong.title {
+        font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
+        font-weight: 800;
+        font-size: 13px;
+        letter-spacing: 0.12em;
+        color: #fff;
+        text-transform: uppercase;
+        margin: 0;
+        line-height: 1.2;
+        text-shadow: 0 2px 10px rgba(0,0,0,0.6);
+    }
+    .readout .value {
+        font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
+        font-size: 28px;
+        font-weight: 900;
+        line-height: 1.1;
+        letter-spacing: -0.01em;
+        margin-top: 4px;
+        font-variant-numeric: tabular-nums;
+        text-shadow: 0 2px 12px rgba(0,0,0,0.72);
+    }
+    .readout .meta {
+        font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
+        font-size: 10px;
+        font-weight: 600;
+        color: rgba(255,255,255,0.7);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        margin-top: 2px;
+    }
+    .readout .scope {
+        width: 160px;
+        height: 30px;
+        margin-top: 10px;
+    }
+    .readout .toggle-ui { 
+        margin-top: 8px; 
+        display: flex; 
+        flex-direction: column; 
+        align-items: center; 
+        justify-content: center; 
+        gap: 6px; 
+    }
+    .toggle-ui .opt { font-size: 16px; font-weight: 900; color: rgba(255,255,255,0.3); text-transform: uppercase; letter-spacing: 0.05em; transition: color 150ms ease; }
+    .toggle-ui .opt.on { color: #6dffb0; text-shadow: 0 0 8px rgba(109,255,176,0.5); }
+    .toggle-ui .opt.off { color: #ff6d6d; text-shadow: 0 0 8px rgba(255,109,109,0.5); }
+    
+    /* Dark gradient behind data display - separate element to avoid clipping */
+    .radial-bg {
+        position: absolute;
+        left: var(--origin-x, 50%);
+        top: var(--origin-y, 50%);
+        width: 250px;
+        height: 250px;
+        transform: translate(-50%, -50%);
+        background: radial-gradient(circle, rgba(0,0,0,0.4) 0%, rgba(0,0,0,0.15) 50%, transparent 70%);
+        pointer-events: none;
+        opacity: 0;
+        z-index: 1;
+        transition: opacity 300ms ease;
+    }
+    .radial-bg.visible { opacity: 1; }
+
+    .delta-positive, .delta-negative { color: #fff; }
+
+    .radial-lock {
+        position: absolute;
+        width: 32px;
+        height: 32px;
+        display: grid;
+        place-items: center;
+        opacity: 0.3;
+        cursor: pointer;
+        user-select: none;
+        transition: opacity 250ms ease, color 250ms ease;
+        z-index: 300;
+        pointer-events: auto;
+        transform: translate(-50%, -50%);
+        color: #fff;
+    }
+    .radial-lock:hover { opacity: 0.8; }
+    .radial-lock.locked { opacity: 0.3; color: #fff; }
+    .radial-lock svg { width: 20px; height: 20px; pointer-events: none; }
+
+/* ──────────────────────────────────────────────────────────────────────────
+ *   RADIAL BUTTON SHAPE  (hex by default, circle when toggled)
+ *   The hex shape is set via CSS mask-image in the radial CSS injected
+ *   from app.js. To switch to circles we strip the mask, give the node
+ *   border-radius:50%, hide the polygon stroke wrapper, and substitute
+ *   a CSS-driven circular border instead.
+ * ────────────────────────────────────────────────────────────────────────── */
+
+body[data-button-shape="circle"] .radial-node {
+    -webkit-mask-image: none !important;
+    mask-image: none !important;
+    clip-path: none !important;
+    border-radius: 50% !important;
+    width: 68px !important;
+    height: 68px !important;
+    border: none;
+    transition: box-shadow 160ms ease, opacity 250ms ease;
+}
+body[data-button-shape="circle"] .hex-stroke-wrap {
+    display: none !important;
+}
+/* Circle fill + stroke as ONE element (like the hex), so they're perfectly
+ * concentric with no gap and the dark fill reaches the stroke. The border is
+ * the circle's outline; matched to the hex stroke's weight (1.5px) and brighter
+ * color so the two shapes feel identical in line weight. */
+body[data-button-shape="circle"] .hex-fill {
+    clip-path: none !important;
+    border-radius: 50% !important;
+    top: 0 !important;
+    left: 0 !important;
+    width: 68px !important;
+    height: 68px !important;
+    box-sizing: border-box;
+    border: 1.5px solid rgba(120, 175, 230, 0.6);
+}
+body[data-button-shape="circle"] .radial-node:hover:not(.empty-slot) {
+    box-shadow: 0 0 8px rgba(80, 220, 255, 0.6);
+}
+body[data-button-shape="circle"] .radial-node:hover:not(.empty-slot) .hex-fill {
+    border-color: #50dcff;
+    border-width: 1.5px;
+}
+body[data-button-shape="circle"] .radial-node.active:not(.empty-slot) {
+    box-shadow: 0 0 12px rgba(80, 220, 255, 0.8);
+}
+body[data-button-shape="circle"] .radial-node.active:not(.empty-slot) .hex-fill {
+    border-color: #50dcff;
+    border-width: 2px;
+}
+body[data-button-shape="circle"] .radial-node.empty-slot .hex-fill {
+    border: 1px dashed rgba(255, 255, 255, 0.3);
+}
+body[data-button-shape="circle"] .radial-node.drop-target .hex-fill {
+    border: 2px solid rgba(255, 255, 255, 0.9);
+}
+body[data-button-shape="circle"] .radial-node.drop-target {
+    box-shadow: 0 0 8px rgba(255, 255, 255, 0.6);
+}
+/* Synthesist + circles → use synth accent for the radial too */
+body[data-theme="synthesist"][data-button-shape="circle"] .radial-node:hover:not(.empty-slot),
+body[data-theme="synthesist"][data-button-shape="circle"] .radial-node.active:not(.empty-slot) {
+    box-shadow: 0 0 10px rgba(255, 170, 85, 0.7);
+}
+body[data-theme="synthesist"][data-button-shape="circle"] .radial-node:hover:not(.empty-slot) .hex-fill,
+body[data-theme="synthesist"][data-button-shape="circle"] .radial-node.active:not(.empty-slot) .hex-fill {
+    border-color: #ffaa55;
+}
+
+/* Synthesist hex-stroke override (only applies in hex mode obviously) */
+body[data-theme="synthesist"][data-button-shape="hex"] .hex-stroke-wrap polygon {
+    stroke: rgba(255, 170, 85, 0.5);
+}
+body[data-theme="synthesist"][data-button-shape="hex"] .radial-node:hover:not(.empty-slot) .hex-stroke-wrap polygon,
+body[data-theme="synthesist"][data-button-shape="hex"] .radial-node.active:not(.empty-slot) .hex-stroke-wrap polygon {
+    stroke: #ffaa55;
+    filter: drop-shadow(0 0 6px #ffaa55);
+}
+
+/* (Section first-child top-margin fix now lives in the .section block
+ * earlier in this file. Block removed; comment kept for grep continuity.) */
+
+/* .btn was inheriting browser-default black on dark backgrounds. Give it
+ * a sensible default text color. */
+.btn {
+    color: #cce6ff;
+}
+body[data-theme="synthesist"] .btn {
+    color: #ffe0c8;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+ *   TOUR TABS  (Sequence / Random — tab look, not buttons)
+ * ────────────────────────────────────────────────────────────────────────── */
+
+.tour-tab {
+    color: #7a8a99;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;  /* overlap parent's bottom border */
+}
+.tour-tab:hover { color: #aabbcc; }
+.tour-tab.active {
+    color: #cce6ff;
+    border-bottom-color: #50dcff;
+}
+body[data-theme="synthesist"] .tour-tab.active {
+    color: #ffe0c8;
+    border-bottom-color: #ffaa55;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+ *   START TOUR BUTTON  (replaces the old orange gradient block)
+ * ────────────────────────────────────────────────────────────────────────── */
+
+.tour-go-btn {
+    color: #050505;
+    background: linear-gradient(180deg, #6dffb0, #50dcff);
+    border: 1px solid rgba(80, 220, 255, 0.6);
+    box-shadow: 0 0 14px rgba(80, 220, 255, 0.18);
+}
+.tour-go-btn:hover {
+    box-shadow: 0 0 22px rgba(80, 220, 255, 0.35);
+    filter: brightness(1.08);
+}
+.tour-go-btn.active {
+    color: #50dcff;
+    background: transparent;
+    border: 1px solid #50dcff;
+    box-shadow: none;
+}
+body[data-theme="synthesist"] .tour-go-btn {
+    color: #1a0e08;
+    background: linear-gradient(180deg, #ff79c6, #ffaa55);
+    border-color: rgba(255, 170, 85, 0.7);
+    box-shadow: 0 0 14px rgba(255, 170, 85, 0.22);
+}
+body[data-theme="synthesist"] .tour-go-btn:hover {
+    box-shadow: 0 0 22px rgba(255, 170, 85, 0.4);
+}
+body[data-theme="synthesist"] .tour-go-btn.active {
+    color: #ffaa55;
+    background: transparent;
+    border-color: #ffaa55;
+    box-shadow: none;
+}
+
+/*   ──────────────────────────────────────────────────────────────────────────
+ *   CURRENT WAYPOINT (during tour) — themed highlight color
+ *   The waypoint cards in the atlas use inline styles set in JS, but we can
+ *   override via CSS using a class added to the card. JS sets `.wp-row-card.is-tour-active`
+ *   on the currently-targeted waypoint.
+ * ────────────────────────────────────────────────────────────────────────── */
+
+.wp-row-card.is-tour-active {
+    background: rgba(var(--accent-rgb), 0.16) !important;
+    border: 1px solid rgba(var(--accent-rgb), 0.55) !important;
+}
+
+/* Hover highlight — a faint wash so it's clear which row the pointer is over,
+ * anywhere on the row. Quieter than is-current so the "you are here" / tour
+ * states still read above it. Skipped while dragging to avoid flicker. */
+.wp-row-card:hover:not(.is-tour-active):not(.is-current) {
+    background: rgba(var(--accent-rgb), 0.05);
+}
+
+/*  is-current = "you are here" — a quieter highlight than is-tour-active.
+ *  Triggered when the user's live params match a waypoint but no tour is
+ *  driving the camera. Should be visible at a glance without competing with
+ *  tour-active when both could theoretically apply (JS guards against both
+ *  classes being on the same card simultaneously). */
+.wp-row-card.is-current {
+    background: rgba(var(--accent-rgb), 0.06) !important;
+    box-shadow: inset 2px 0 0 rgba(var(--accent-rgb), 0.55) !important;
+    border: 1px solid rgba(var(--accent-rgb), 0.18) !important;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+ *   CLASSIC THEME ACCENT REFRESH  (teal-leaning)
+ *   The unset/default theme uses the original cyan/green slider bars
+ * ────────────────────────────────────────────────────────────────────────── */
+
+body:not([data-theme="synthesist"]) .bar i {
+    background: linear-gradient(90deg, #1a4a40, #6dffb0);
+}
+body:not([data-theme="synthesist"]) .row .val {
+    color: #5fe0c0;
+    text-shadow: 0 0 8px rgba(95, 224, 192, 0.4);
+}
+body:not([data-theme="synthesist"]) .panel-head span {
+    color: #7ad8c0;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+ *   TUNED-UP MODULATION PULSE  (more visible than the previous subtle pulse)
+ * ────────────────────────────────────────────────────────────────────────── */
+
+@keyframes modPulse {
+    0%, 100% { opacity: 1; transform: scaleY(1); filter: brightness(1); }
+    50%      { opacity: 0.55; transform: scaleY(1.7); filter: brightness(1.6); }
+}
+.row[data-modulating="true"] .bar i {
+    animation: modPulse 1.0s ease-in-out infinite !important;
+    box-shadow: 0 0 12px currentColor;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+ *   CIRCLE BUTTON HOVER (responsiveness fix)
+ *   Animate smoothly when toggling between hex and circle (in either direction)
+ *   while keeping hover/active feedback instant.
+ * ────────────────────────────────────────────────────────────────────────── */
+
+body[data-button-shape="circle"] .radial-node {
+    transition: left 280ms cubic-bezier(.4,.0,.2,1), top 280ms cubic-bezier(.4,.0,.2,1), opacity 250ms ease, background 160ms ease;
+}
+body[data-button-shape="circle"] .radial-node:hover:not(.empty-slot),
+body[data-button-shape="circle"] .radial-node.active:not(.empty-slot) {
+    transition: opacity 250ms ease, background 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+}
+body[data-button-shape="hex"] .radial-node {
+    transition: left 280ms cubic-bezier(.4,.0,.2,1), top 280ms cubic-bezier(.4,.0,.2,1), opacity 250ms ease;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+ *   DOCK BUTTONS  (inverted state semantics — see initDock comments)
+ *   data-closed="true"  → looks like a pressable button (panel is hidden)
+ *   data-closed="false" → looks dim/recessed (panel is open and active)
+ * ────────────────────────────────────────────────────────────────────────── */
+
+.dock-btn {
+    border-radius: 6px;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 6px 10px;
+    cursor: pointer;
+    font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
+    transition: background 200ms ease, border-color 200ms ease, color 200ms ease, box-shadow 200ms ease, backdrop-filter 200ms ease;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    line-height: 1;
+    /* Backdrop blur tracks --btn-blur (set by updatePO from buttonOpacity).
+     * Without this, the panels had a frosted-glass blur but dock buttons
+     * rendered crisp against whatever was behind them — felt visually
+     * inconsistent. Now they all share the same glass treatment driven
+     * by the same slider. */
+    backdrop-filter: blur(var(--btn-blur, 0px));
+    -webkit-backdrop-filter: blur(var(--btn-blur, 0px));
+    /* Button Opacity slider fades the BACKGROUND/BORDER via --btn-alpha
+     * but leaves text readable. Matches the radial button behavior the
+     * user expects: buttons can be made nearly invisible visually while
+     * their labels remain legible. Per-state rules below compose
+     * --btn-alpha into their rgba() values so the fade is uniform across
+     * closed/open/hover/synthesist variants. */
+}
+
+/* CLOSED — looks like a button you can press */
+.dock-btn[data-closed="true"] {
+    background: rgba(80, 220, 255, calc(0.10 * var(--btn-alpha, 1)));
+    border: 1px solid rgba(80, 220, 255, calc(0.45 * var(--btn-alpha, 1)));
+    color: #cce6ff;
+    box-shadow: 0 0 12px rgba(80, 220, 255, calc(0.12 * var(--btn-alpha, 1)));
+}
+.dock-btn[data-closed="true"]:hover {
+    background: rgba(80, 220, 255, calc(0.18 * var(--btn-alpha, 1)));
+    border-color: rgba(80, 220, 255, calc(0.75 * var(--btn-alpha, 1)));
+    box-shadow: 0 0 16px rgba(80, 220, 255, calc(0.25 * var(--btn-alpha, 1)));
+}
+
+/* OPEN — looks recessed/inactive (panel itself is the active surface now) */
+.dock-btn[data-closed="false"] {
+    background: rgba(255, 255, 255, calc(0.04 * var(--btn-alpha, 1)));
+    border: 1px solid rgba(255, 255, 255, calc(0.07 * var(--btn-alpha, 1)));
+    color: #5a6a78;
+    box-shadow: none;
+}
+.dock-btn[data-closed="false"]:hover {
+    border-color: rgba(255, 255, 255, calc(0.18 * var(--btn-alpha, 1)));
+    color: #8a9aaa;
+}
+
+/* SYNTHESIST THEME — amber accents */
+body[data-theme="synthesist"] .dock-btn[data-closed="true"] {
+    background: rgba(255, 170, 85, calc(0.12 * var(--btn-alpha, 1)));
+    border-color: rgba(255, 170, 85, calc(0.5 * var(--btn-alpha, 1)));
+    color: #ffe0c8;
+    box-shadow: 0 0 12px rgba(255, 170, 85, calc(0.15 * var(--btn-alpha, 1)));
+}
+body[data-theme="synthesist"] .dock-btn[data-closed="true"]:hover {
+    background: rgba(255, 170, 85, calc(0.2 * var(--btn-alpha, 1)));
+    border-color: rgba(255, 170, 85, calc(0.8 * var(--btn-alpha, 1)));
+    box-shadow: 0 0 18px rgba(255, 170, 85, calc(0.32 * var(--btn-alpha, 1)));
+}
+body[data-theme="synthesist"] .dock-btn[data-closed="false"]:hover {
+    color: #a08070;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+ *   DOCK NAV TOGGLE — Orbit/Fly camera mode switch on the far left of dock.
+ *   Butt-joined segmented control: same visual language as .dock-btn (border,
+ *   colors, hover) but the two segments share an edge with no gap. Orbit has
+ *   hard corners on the right, Fly has hard corners on the left, so they
+ *   read as one unified pill while individually each still behaves like an
+ *   active/inactive dock button.
+ *
+ *   Mapping:
+ *     [data-active="true"]  ↔ .dock-btn[data-closed="true"]   (highlighted)
+ *     [data-active="false"] ↔ .dock-btn[data-closed="false"]  (recessed)
+ *
+ *   To prevent doubled borders at the seam we negative-margin the right
+ *   segment by -1px to overlap the left's right border, and use
+ *   position+z-index so the active segment's border always draws over the
+ *   inactive one (avoids a half-active half-inactive border showing through).
+ * ────────────────────────────────────────────────────────────────────────── */
+
+.dock-nav-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 0;
+    margin-right: 4px;
+}
+
+/* .dock-speed-popup — hover-revealed vertical slider above a nav button.
+ * Minimal chrome — no background panel, no border, no shadow. Just the
+ * label text above and the slider below, floating over whatever's behind.
+ * Background panels felt garish (purple thumb against black box) and
+ * competed for attention with the visualization. Now the popup reads as
+ * a transient overlay rather than a heavyweight UI element. */
+.dock-speed-popup {
+    position: absolute;
+    left: 50%;
+    bottom: calc(100% + 12px);
+    transform: translateX(-50%);
+    width: 48px;
+    height: 110px;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 4px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 180ms ease;
+    z-index: 600;
+}
+.dock-speed-popup.visible {
+    opacity: 1;
+    pointer-events: auto;
+}
+.dock-speed-label {
+    font-size: 7px;
+    letter-spacing: 0.08em;
+    color: #aabbcc;
+    text-transform: uppercase;
+    text-align: center;
+    line-height: 1.2;
+    white-space: pre-line;
+    /* Text shadow so the label stays legible over varied backgrounds —
+     * the popup no longer has its own bg so the canvas/panels show
+     * through directly. */
+    text-shadow: 0 0 6px rgba(0, 0, 0, 0.85), 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+.dock-speed-val {
+    font-size: 8px;
+    color: #6dffb0;
+    font-variant-numeric: tabular-nums;
+    text-shadow: 0 0 6px rgba(0, 0, 0, 0.85);
+}
+/* Vertical range input. Custom appearance so the track and thumb match
+ * the panel theme — the default browser styling was a black box with a
+ * purple thumb on Chromium, which clashed badly with both themes.
+ * Orientation is now controlled by writing-mode (slider-vertical was
+ * deprecated by Chrome in favor of the standardized CSS approach). */
+.dock-speed-range {
+    writing-mode: vertical-lr;
+    direction: rtl;
+    width: 6px;
+    height: 78px;
+    margin: 0;
+    cursor: pointer;
+    background: rgba(80, 220, 255, 0.12);
+    border-radius: 3px;
+    accent-color: #50dcff;
+}
+/* Synthesist theme — slider track + value text + accent flip to amber. */
+body[data-theme="synthesist"] .dock-speed-label {
+    color: #c08070;
+}
+body[data-theme="synthesist"] .dock-speed-val {
+    color: #ff79c6;
+}
+body[data-theme="synthesist"] .dock-speed-range {
+    background: rgba(255, 170, 85, 0.14);
+    accent-color: #ffaa55;
+}
+
+/* .dock-capture-btn — one-shot screenshot button sitting next to the
+ * orbit/fly toggle in the dock. Visually a peer of .dock-btn[data-closed="true"]
+ * — same background, border, color, box-shadow, and --btn-alpha responsiveness.
+ * "Capture" is always an action (never a state), so it just uses the closed
+ * style permanently. SVG icon inherits currentColor. */
+.dock-capture-btn {
+    appearance: none;
+    border-radius: 6px;
+    padding: 6px 10px;
+    cursor: pointer;
+    font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
+    transition: background 200ms ease, border-color 200ms ease, color 200ms ease, box-shadow 200ms ease, backdrop-filter 200ms ease;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+    /* Backdrop blur matches the panel + dock-btn glass treatment via
+     * --btn-blur. Without this the capture button rendered crisp against
+     * the canvas while everything else around it had the frosted look. */
+    backdrop-filter: blur(var(--btn-blur, 0px));
+    -webkit-backdrop-filter: blur(var(--btn-blur, 0px));
+    /* Matches .dock-btn[data-closed="true"] — same rgba(80,220,255) palette,
+     * same alpha multipliers, same --btn-alpha responsiveness. Capture
+     * reads as a peer of the panel buttons rather than a different element. */
+    background: rgba(80, 220, 255, calc(0.10 * var(--btn-alpha, 1)));
+    border: 1px solid rgba(80, 220, 255, calc(0.45 * var(--btn-alpha, 1)));
+    color: #cce6ff;
+    box-shadow: 0 0 12px rgba(80, 220, 255, calc(0.12 * var(--btn-alpha, 1)));
+}
+.dock-capture-btn:hover {
+    background: rgba(80, 220, 255, calc(0.18 * var(--btn-alpha, 1)));
+    border-color: rgba(80, 220, 255, calc(0.75 * var(--btn-alpha, 1)));
+    box-shadow: 0 0 16px rgba(80, 220, 255, calc(0.25 * var(--btn-alpha, 1)));
+}
+body[data-theme="synthesist"] .dock-capture-btn {
+    background: rgba(255, 170, 85, calc(0.12 * var(--btn-alpha, 1)));
+    border-color: rgba(255, 170, 85, calc(0.5 * var(--btn-alpha, 1)));
+    color: #ffe0c8;
+    box-shadow: 0 0 12px rgba(255, 170, 85, calc(0.14 * var(--btn-alpha, 1)));
+}
+body[data-theme="synthesist"] .dock-capture-btn:hover {
+    background: rgba(255, 170, 85, calc(0.20 * var(--btn-alpha, 1)));
+    border-color: rgba(255, 170, 85, calc(0.78 * var(--btn-alpha, 1)));
+    box-shadow: 0 0 16px rgba(255, 170, 85, calc(0.28 * var(--btn-alpha, 1)));
+}
+
+.dock-nav-seg {
+    appearance: none;
+    border-radius: 0;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 6px 10px;
+    cursor: pointer;
+    font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
+    transition: background 200ms ease, border-color 200ms ease, color 200ms ease, box-shadow 200ms ease, opacity 200ms ease, backdrop-filter 200ms ease;
+    display: inline-flex;
+    align-items: center;
+    line-height: 1;
+    /* Backdrop blur matches the rest of the dock buttons. Without it,
+     * the orbit/fly toggle rendered crisp while everything else around
+     * it had the frosted-glass treatment driven by Button Opacity. */
+    backdrop-filter: blur(var(--btn-blur, 0px));
+    -webkit-backdrop-filter: blur(var(--btn-blur, 0px));
+    /* Per dock-btn behavior: --btn-alpha drives bg/border alpha so text
+     * stays readable. NOT a blanket opacity. */
+    position: relative;
+    z-index: 1;
+}
+/* End-cap rounding: only the outer corners of the pair are rounded; the
+ * inner edges butt flat against each other. */
+.dock-nav-seg:first-child {
+    border-radius: 6px 0 0 6px;
+}
+.dock-nav-seg:last-child {
+    border-radius: 0 6px 6px 0;
+    margin-left: -1px; /* overlap left segment's right border — no doubled line */
+}
+/* Active segment's z-index wins so its (colored) border draws over the
+ * adjacent segment's (gray) border at the seam, instead of leaving a
+ * half-and-half artifact there. */
+.dock-nav-seg[data-active="true"] {
+    z-index: 2;
+}
+
+/* ACTIVE — mirrors .dock-btn[data-closed="true"] */
+.dock-nav-seg[data-active="true"] {
+    background: rgba(80, 220, 255, calc(0.10 * var(--btn-alpha, 1)));
+    border: 1px solid rgba(80, 220, 255, calc(0.45 * var(--btn-alpha, 1)));
+    color: #cce6ff;
+    box-shadow: 0 0 12px rgba(80, 220, 255, calc(0.12 * var(--btn-alpha, 1)));
+}
+.dock-nav-seg[data-active="true"]:hover {
+    background: rgba(80, 220, 255, calc(0.18 * var(--btn-alpha, 1)));
+    border-color: rgba(80, 220, 255, calc(0.75 * var(--btn-alpha, 1)));
+    box-shadow: 0 0 16px rgba(80, 220, 255, calc(0.25 * var(--btn-alpha, 1)));
+}
+
+/* INACTIVE — mirrors .dock-btn[data-closed="false"] */
+.dock-nav-seg[data-active="false"] {
+    background: rgba(255, 255, 255, calc(0.04 * var(--btn-alpha, 1)));
+    border: 1px solid rgba(255, 255, 255, calc(0.07 * var(--btn-alpha, 1)));
+    color: #5a6a78;
+    box-shadow: none;
+}
+.dock-nav-seg[data-active="false"]:hover {
+    border-color: rgba(255, 255, 255, calc(0.18 * var(--btn-alpha, 1)));
+    color: #8a9aaa;
+}
+
+/* SYNTHESIST THEME — amber to match .dock-btn theming */
+body[data-theme="synthesist"] .dock-nav-seg[data-active="true"] {
+    background: rgba(255, 170, 85, calc(0.12 * var(--btn-alpha, 1)));
+    border-color: rgba(255, 170, 85, calc(0.5 * var(--btn-alpha, 1)));
+    color: #ffe0c8;
+    box-shadow: 0 0 12px rgba(255, 170, 85, calc(0.15 * var(--btn-alpha, 1)));
+}
+body[data-theme="synthesist"] .dock-nav-seg[data-active="true"]:hover {
+    background: rgba(255, 170, 85, calc(0.2 * var(--btn-alpha, 1)));
+    border-color: rgba(255, 170, 85, calc(0.8 * var(--btn-alpha, 1)));
+    box-shadow: 0 0 18px rgba(255, 170, 85, calc(0.32 * var(--btn-alpha, 1)));
+}
+body[data-theme="synthesist"] .dock-nav-seg[data-active="false"]:hover {
+    color: #a08070;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+ *   CONFIG TABS (System / Profile) — keep the Config panel from being so
+ *   tall it pushes off-screen on smaller displays. Tabs persist via
+ *   localStorage('ss_cfg_tab').
+ * ────────────────────────────────────────────────────────────────────────── */
+
+.cfg-tab-bar {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 10px;
+    border-bottom: 1px solid rgba(80, 220, 255, 0.18);
+    padding-bottom: 0;
+}
+.cfg-tab {
+    appearance: none;
+    background: transparent;
+    border: 1px solid transparent;
+    border-bottom: none;
+    color: #6a7a8a;
+    font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    padding: 6px 12px;
+    cursor: pointer;
+    border-top-left-radius: 4px;
+    border-top-right-radius: 4px;
+    margin-bottom: -1px;
+    transition: color 180ms ease, background 180ms ease, border-color 180ms ease;
+}
+/* Suppress the browser's default focus ring on cfg tabs. We don't support
+ * Tab-key keyboard navigation through the UI (the Tab key is bound to
+ * toggle UI visibility), so the focus outline here only appears as visual
+ * noise — never as a useful affordance. */
+.cfg-tab:focus,
+.cfg-tab:focus-visible {
+    outline: none;
+}
+.cfg-tab:hover {
+    color: #cce6ff;
+}
+.cfg-tab[data-active="true"] {
+    background: rgba(80, 220, 255, 0.10);
+    border-color: rgba(80, 220, 255, 0.35);
+    color: #cce6ff;
+}
+.cfg-pane {
+    /* Each pane uses the same vertical-flow as the old flat Config body.
+     * Top padding gives consistent breathing room below the tab bar across
+     * all three panes (UI, System, Profile) — without this, panes with
+     * lots of content (UI) feel cramped at the top while panes with few
+     * sections (System) feel like the content is glued to the tab bar. */
+    padding-top: 4px;
+}
+
+body[data-theme="synthesist"] .cfg-tab-bar {
+    border-bottom-color: rgba(255, 170, 85, 0.22);
+}
+/* Off-state cfg-tab in synthesist — muted amber instead of the default
+ * #6a7a8a which read as cornflower-adjacent against the warm palette. */
+body[data-theme="synthesist"] .cfg-tab {
+    color: rgba(255, 224, 200, 0.40);
+}
+body[data-theme="synthesist"] .cfg-tab:hover {
+    color: #ffe0c8;
+}
+body[data-theme="synthesist"] .cfg-tab[data-active="true"] {
+    background: rgba(255, 170, 85, 0.12);
+    border-color: rgba(255, 170, 85, 0.38);
+    color: #ffe0c8;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * FPS / ENTROPY readout
+ * Color shifts based on data-tier set by the fps-monitor loop.
+ * No dark box behind it; the number reads cleanly against the dock background.
+* ────────────────────────────────────────────────────────────────────────── */
+
+.dock-fps {
+    font-variant-numeric: tabular-nums;
+    font-weight: 700;
+    font-size: 11px;
+    padding: 0;
+    border-radius: 0;
+    background: transparent;
+    min-width: 22px;
+    text-align: right;
+}
+.dock-fps[data-tier="normal"]   { color: #6dffb0; }
+.dock-fps[data-tier="warming"]  { color: #ffe066; }
+.dock-fps[data-tier="heating"]  { color: #ff9a40; }
+.dock-fps[data-tier="hot"]      { color: #ff5d5d; }
+.dock-fps[data-tier="overload"] { color: #ff4da6; }
+
+/* ──────────────────────────────────────────────────────────────────────────
+ *   DOCK DRAG HANDLE
+ *   Six dots in a 2×3 grid on the left of the dock.
+ *   Grab here to move it, click buttons normally. Theme-tinted.
+ * ────────────────────────────────────────────────────────────────────────── */
+
+.dock-handle {
+    position: relative;       /* NOT fixed — flows naturally inside the dock */
+    display: inline-grid;
+    grid-template-columns: 3px 3px;
+    grid-template-rows: 3px 3px 3px;
+    gap: 2px;
+    padding: 5px 6px;
+    cursor: grab;
+    opacity: 0.4;
+    transition: opacity 160ms ease;
+    align-self: stretch;
+    align-items: center;
+    align-content: center;
+}
+.dock-handle:hover {
+    opacity: 0.85;
+}
+.dock-handle:active {
+    cursor: grabbing;
+}
+.dock-handle span {
+    width: 3px;
+    height: 3px;
+    border-radius: 50%;
+    background: rgba(var(--stroke-rgb), 0.75);
+    display: block;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+ *   ENTROPY PANEL
+ *   Compact gauge that opens when the dock Entropy button is clicked.
+ *   Center: big entropy number. Around it: arc gauge showing the same
+ *   value as a 0-100 fill. Bottom: small FPS readout for the curious.
+ * ────────────────────────────────────────────────────────────────────────── */
+
+/* ──────────────────────────────────────────────────────────────────────────
+ *   ENTROPY PANEL  (lives inside a standard .panel — see toggleEntropyPanel)
+ *   Just the inner content: gauge ring + centered value + fps readout.
+ *   Everything else (drag, minimize, scanlines, opacity) comes from .panel.
+ * ────────────────────────────────────────────────────────────────────────── */
+
+#panelEntropy .panel-body {
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+}
+/* Wrapper around the SVG gauge — establishes a positioning context so the
+ * value text can sit exactly at its center regardless of overall layout. */
+.entropy-gauge-wrap {
+    position: relative;
+    width: 120px;
+    height: 120px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.entropy-gauge {
+    width: 100%;
+    height: 100%;
+    display: block;
+}
+.entropy-gauge-track {
+    fill: none;
+    stroke: rgba(120, 120, 180, 0.15);
+    stroke-width: 6;
+}
+.entropy-gauge-fill {
+    fill: none;
+    stroke-width: 6;
+    stroke-linecap: round;
+    transition: stroke-dasharray 250ms ease, stroke 350ms ease;
+}
+.entropy-gauge-fill[data-tier="normal"]   { stroke: #6dffb0; }
+.entropy-gauge-fill[data-tier="warming"]  { stroke: #ffe066; }
+.entropy-gauge-fill[data-tier="heating"]  { stroke: #ff9a40; }
+.entropy-gauge-fill[data-tier="hot"]      { stroke: #ff5d5d; }
+.entropy-gauge-fill[data-tier="overload"] { stroke: #ff4da6; }
+.entropy-panel-value {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    /* Visually centered inside the gauge ring. translate(-50%,-50%) puts
+     * the text's bounding box at the wrapper's exact center; line-height:1
+     * removes the leading that was making it sit low before. */
+    transform: translate(-50%, -50%);
+    line-height: 1;
+    font-size: 30px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: #6dffb0;
+    text-shadow: 0 0 12px currentColor;
+    transition: color 350ms ease;
+    pointer-events: none;
+}
+.entropy-panel-value[data-tier="normal"]   { color: #6dffb0; }
+.entropy-panel-value[data-tier="warming"]  { color: #ffe066; }
+.entropy-panel-value[data-tier="heating"]  { color: #ff9a40; }
+.entropy-panel-value[data-tier="hot"]      { color: #ff5d5d; }
+.entropy-panel-value[data-tier="overload"] { color: #ff4da6; }
+.entropy-panel-fps-row {
+    font-size: 9px;
+    color: #6a7a8a;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    display: flex;
+    gap: 6px;
+    align-items: baseline;
+    margin-top: 2px;
+}
+.entropy-panel-fps {
+    font-variant-numeric: tabular-nums;
+    color: #8a9aaa;
+    font-weight: 600;
+    text-transform: none;
+    letter-spacing: 0;
+}
+
+
+/* ──────────────────────────────────────────────────────────────────────────
+ *   SYNTHESIST + CIRCLES — idle state
+ *   Without this, circles in synth theme had cyan-blue idle borders (from
+ *   the base circle rule at line ~949) and only flipped to amber on hover
+ *   or active. Now the resting state is amber too.
+ * ────────────────────────────────────────────────────────────────────────── */
+
+body[data-theme="synthesist"][data-button-shape="circle"] .radial-node {
+    border-color: rgba(255, 170, 85, 0.4);
+}
+body[data-theme="synthesist"][data-button-shape="circle"] .radial-node.empty-slot {
+    border: 2px dashed rgba(255, 170, 85, 0.28);
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+ *   GLOBAL NO-SELECT  (except inputs)
+ *   Prevents text selection when dragging the logo, panel heads, dock, etc.
+ *   Inputs and textareas opt back in below.
+ * ────────────────────────────────────────────────────────────────────────── */
+.hud-element,
+.dock,
+.dock-btn,
+.btn,
+.thumb-frame,
+.section,
+.row .label,
+.row .val,
+.row .subhead,
+.panel-head {
+    user-select: none;
+    -webkit-user-select: none;
+}
+input, textarea, .wp-edit {
+    user-select: text;
+    -webkit-user-select: text;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+ *   BOOT FADE-IN
+ *   Canvases start at 0 opacity and fade in once .ui-ready is added on
+ *   body. Makes the abrupt "engine appears" moment a graceful fade.
+ * ────────────────────────────────────────────────────────────────────────── */
+canvas {
+    opacity: 0;
+    transition: opacity 1.6s ease-out;
+}
+body.engine-ready canvas {
+    opacity: 1;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+ *   GROUP TOGGLES (Orbit/WASD, Quanta/Strings/Lattice, etc.)
+ *   Themed accent colors. The matching slider visual language: theme-tinted
+ *   background, theme-tinted text. Subtle enough to feel like part of the
+ *   chrome but recognizable as a control.
+ * ────────────────────────────────────────────────────────────────────────── */
+
+.group-toggles {
+    display: flex;
+    background: rgba(10, 10, 24, 0.55);
+    border: 1px solid rgba(80, 220, 255, 0.18);
+    border-radius: 4px;
+    overflow: hidden;
+    margin-bottom: 12px;
+    box-shadow: inset 0 0 12px rgba(80, 220, 255, 0.04);
+}
+.group-toggle-btn {
+    flex: 1;
+    text-align: center;
+    padding: 6px 5px;
+    font-size: 8px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    cursor: pointer;
+    user-select: none;
+    /* Off-state uses theme accent at low alpha rather than a literal gray —
+     * gray clashed with both classic and synthesist palettes and read as
+     * "broken" rather than "inactive." Theme variants override below. */
+    color: rgba(204, 230, 255, 0.42);
+    background: transparent;
+    transition: background 160ms ease, color 160ms ease, box-shadow 160ms ease;
+    border-right: 1px solid rgba(80, 220, 255, 0.15);
+}
+.group-toggle-btn:last-child { border-right: none; }
+.group-toggle-btn:hover {
+    color: #cce6ff;
+    background: rgba(80, 220, 255, 0.05);
+}
+.group-toggle-btn[data-active="1"] {
+    cursor: default;
+    background: linear-gradient(180deg, rgba(80, 220, 255, 0.22), rgba(80, 220, 255, 0.10));
+    color: #cce6ff;
+    box-shadow: inset 0 -2px 0 rgba(80, 220, 255, 0.8), 0 0 12px rgba(80, 220, 255, 0.15);
+    text-shadow: 0 0 6px rgba(80, 220, 255, 0.5);
+}
+/* .disabled — dependent control whose parent context is off. Examples:
+ *   • Include group (Background/Scanlines) when no Save trigger is active
+ *   • Particle Shape when Quanta is off
+ *   • Trail Length when both Strings and Lattice are off
+ *   • Save button when no export-include toggles are on
+ * Fades the wrapper to read as "not currently configurable" and blocks
+ * clicks so the user can't toggle inert state. Specific class
+ * .group-toggles.disabled retained as an alias for backward compat. */
+.disabled,
+.group-toggles.disabled {
+    opacity: 0.35;
+    pointer-events: none;
+    transition: opacity 200ms ease;
+}
+/* .thumb-disabled — applied to the export-toggle row containing
+ * Waypoints+Thumbnails when Waypoints is off. Targets only the second
+ * button (Thumbnails) so Waypoints itself stays clickable. Same fade and
+ * pointer-events lock as .disabled, scoped to the dependent child. */
+.group-toggles.thumb-disabled .group-toggle-btn:nth-child(2) {
+    opacity: 0.35;
+    pointer-events: none;
+    transition: opacity 200ms ease;
+}
+/* .save-thumb-disabled — like .thumb-disabled but for the 4-button Save
+ * Progress row (Config/Profile/Waypoints/Thumbs). Disables only the 4th
+ * button (Thumbs) when Waypoints (the 3rd) is off. */
+.group-toggles.save-thumb-disabled .group-toggle-btn:nth-child(4) {
+    opacity: 0.35;
+    pointer-events: none;
+    transition: opacity 200ms ease;
+}
+/* .include-disabled — applied to the System screenshot row (Waypoint /
+ * Thumb / BG / Scanlines) when neither save trigger (the first two
+ * buttons) is on. Disables only buttons 3 and 4 (BG, Scanlines) since
+ * those are the conditional "what to include" half of the row. */
+.group-toggles.include-disabled .group-toggle-btn:nth-child(3),
+.group-toggles.include-disabled .group-toggle-btn:nth-child(4) {
+    opacity: 0.35;
+    pointer-events: none;
+    transition: opacity 200ms ease;
+}
+
+/* Waypoint detail view — Back to Atlas link, sticky-positioned at top
+ * of the scrolling list container so it's always reachable. The
+ * background gradient masks scrolling content as it passes underneath.
+ * Color uses theme-appropriate accent (cornflower in classic, amber in
+ * synthesist) via the theme overrides below. */
+.wp-back {
+    color: #8ab8e8;
+}
+.wp-back:hover {
+    color: #aaccff;
+}
+body[data-theme="synthesist"] .wp-back {
+    color: #ffaa55;
+}
+body[data-theme="synthesist"] .wp-back:hover {
+    color: #ffcc88;
+}
+
+/* Imported-tag on waypoint cards in the Atlas list — small uppercase
+ * subhead noting this waypoint came from an imported share string or
+ * save file. Theme accent so it doesn't clash with the synthesist
+ * palette. */
+.wp-imported-tag {
+    color: #7a9acc;
+}
+body[data-theme="synthesist"] .wp-imported-tag {
+    color: #b08070;
+}
+
+/* Discovered-by line under waypoint headline. Same paradigm as section
+ * subheads — brand-color prefix ("discovered by ") plus white name. The
+ * .wp-discoby-name is white in both themes (it's an identity, not a
+ * thematic accent), while the label adopts the theme's subhead color. */
+.wp-discoby-label {
+    color: #718a99;
+}
+.wp-discoby-name {
+    color: #e6f0fa;
+    font-weight: 500;
+}
+body[data-theme="synthesist"] .wp-discoby-label {
+    color: #b08070;
+}
+body[data-theme="synthesist"] .wp-discoby-name {
+    color: #f0e0d0;
+}
+
+/* .button-row — independent multi-select pill buttons. Distinct from
+ * .group-toggles (which is the joined-tab style used for mutually
+ * exclusive options). Visible gaps between buttons signal independence:
+ * any combination of buttons can be on or off without affecting the
+ * others, in contrast to tabs where exactly one is always selected. */
+.button-row {
+    display: flex;
+    gap: 4px;
+    margin: 0 0 12px 0;
+    flex-wrap: wrap;
+}
+.button-row-btn {
+    flex: 1;
+    min-width: 0;
+    text-align: center;
+    padding: 6px 3px;
+    font-size: 8px;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: pointer;
+    user-select: none;
+    border-radius: 4px;
+    transition: background 160ms ease, color 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
+    /* Off-state: theme accent at low alpha (matches .group-toggle-btn). */
+    color: rgba(204, 230, 255, 0.42);
+    background: rgba(80, 220, 255, calc(0.04 * var(--btn-alpha, 1)));
+    border: 1px solid rgba(80, 220, 255, calc(0.18 * var(--btn-alpha, 1)));
+}
+.button-row-btn:hover {
+    color: #cce6ff;
+    background: rgba(80, 220, 255, calc(0.10 * var(--btn-alpha, 1)));
+    border-color: rgba(80, 220, 255, calc(0.35 * var(--btn-alpha, 1)));
+}
+.button-row-btn[data-active="1"] {
+    color: #cce6ff;
+    background: rgba(80, 220, 255, calc(0.22 * var(--btn-alpha, 1)));
+    border-color: rgba(80, 220, 255, calc(0.65 * var(--btn-alpha, 1)));
+    box-shadow: 0 0 10px rgba(80, 220, 255, calc(0.18 * var(--btn-alpha, 1)));
+}
+/* Synthesist theme variants — amber palette. */
+body[data-theme="synthesist"] .button-row-btn {
+    color: rgba(255, 224, 200, 0.40);
+    background: rgba(255, 170, 85, calc(0.05 * var(--btn-alpha, 1)));
+    border-color: rgba(255, 170, 85, calc(0.22 * var(--btn-alpha, 1)));
+}
+body[data-theme="synthesist"] .button-row-btn:hover {
+    color: #ffe0c8;
+    background: rgba(255, 170, 85, calc(0.12 * var(--btn-alpha, 1)));
+    border-color: rgba(255, 170, 85, calc(0.40 * var(--btn-alpha, 1)));
+}
+body[data-theme="synthesist"] .button-row-btn[data-active="1"] {
+    color: #ffe0c8;
+    background: rgba(255, 170, 85, calc(0.25 * var(--btn-alpha, 1)));
+    border-color: rgba(255, 170, 85, calc(0.70 * var(--btn-alpha, 1)));
+    box-shadow: 0 0 10px rgba(255, 170, 85, calc(0.22 * var(--btn-alpha, 1)));
+}
+
+/* Dependent-disable variants for button-row, mirroring the same patterns
+ * used on .group-toggles. The third+fourth buttons in the Save Screenshot
+ * row (BG, Scanlines) disable when neither save trigger is active; the
+ * fourth button in the Save Progress row (Thumbs) disables when Waypoints
+ * is off; etc. */
+.button-row.thumb-disabled .button-row-btn:nth-child(2),
+.button-row.save-thumb-disabled .button-row-btn:nth-child(4),
+.button-row.include-disabled .button-row-btn:nth-child(3),
+.button-row.include-disabled .button-row-btn:nth-child(4) {
+    opacity: 0.35;
+    pointer-events: none;
+    transition: opacity 200ms ease;
+}
+
+/* Controls panel — single shared grid for all sections so the binding
+ * column stays vertically aligned across the entire panel. Section
+ * headers span both columns and carry a faint bottom rule to visually
+ * separate them from the rows below (previously the white headline
+ * blended into the row labels right beneath it). */
+.controls-grid {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    column-gap: 12px;
+    row-gap: 4px;
+    font-size: 9px;
+    line-height: 1.5;
+}
+.controls-section-head {
+    grid-column: 1 / -1;
+    color: #d9edf6;
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    margin-top: 14px;
+    margin-bottom: 4px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid rgba(120, 140, 170, 0.18);
+}
+.controls-section-head.is-first {
+    margin-top: 0;
+}
+.controls-row-label {
+    color: #bbccdd;
+    padding-left: 8px; /* indent rows from the header so the hierarchy reads */
+    white-space: nowrap;
+}
+.controls-row-binding {
+    color: #718a99;
+    font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
+    font-size: 9px;
+    white-space: nowrap;
+    text-align: left;
+}
+body[data-theme="synthesist"] .controls-section-head {
+    color: #f0e0d0;
+    border-bottom-color: rgba(255, 170, 85, 0.22);
+}
+body[data-theme="synthesist"] .controls-row-label {
+    color: #e0c8b8;
+}
+body[data-theme="synthesist"] .controls-row-binding {
+    color: #b08070;
+}
+
+/* .wp-travel-hdr — green airplane button on waypoint detail view header.
+ * Stays green in both themes (no synthesist override) because "green = go"
+ * is a universal UX convention and the per-row travel buttons on the list
+ * view are inline-styled green too — consistency across themes matters
+ * more here than theme harmony. */
+.wp-travel-hdr {
+    flex: 0 0 auto;
+    color: #6aaa7a;
+    font-size: 16px;
+    cursor: pointer;
+    padding: 4px 6px;
+    border-radius: 3px;
+    line-height: 1;
+    transition: background 150ms ease, color 150ms ease;
+    user-select: none;
+    -webkit-user-select: none;
+}
+.wp-travel-hdr:hover {
+    background: rgba(106, 170, 122, 0.15);
+    color: #8acc9a;
+}
+.wp-travel-hdr:active {
+    background: rgba(106, 170, 122, 0.25);
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+ *   STROBE WARNING
+ *   Subtle text notice at the bottom of the screen, fades in then out
+ *   on every page load. Total 5 seconds: 1s fade in, 3s hold, 1s fade out.
+ *   Bare-minimum photosensitivity courtesy — no way to fully neutralize
+ *   strobing in a parametric particle sim, so we warn rather than try to
+ *   filter. Non-blocking: pointer-events:none means the warning never
+ *   intercepts interactions even while visible.
+ * ────────────────────────────────────────────────────────────────────────── */
+/* Strobe warning — succinct text notice at the bottom of the screen.
+ * Gated to ui-ready so it plays only after the splash dismisses; users
+ * shouldn't see ambient overlays competing with the start screen. Once
+ * triggered: 1s fade in, 3s hold, 1s fade out. Non-blocking via
+ * pointer-events:none. */
+/* (Former #strobeWarning rules removed — the photosensitivity advisory
+ * now uses the global showToast system on splash dismiss. Keeping all
+ * one-shot advisories in a single positioning + animation system means
+ * future warnings only need a single line of JS to add.) */
+
+/* .btn-danger — destructive actions (Clear Waypoints, Clear All Data).
+ * Same .btn base but with red border + text. Hover reverses to a more
+ * urgent red fill, signaling "this will actually do something
+ * destructive if you click." Red stays red across themes — danger
+ * doesn't recolor for the synthesist palette. Specificity uses .btn.btn-danger
+ * to outrank body[data-theme="synthesist"] .btn which sets a default theme color. */
+.btn.btn-danger {
+    border-color: rgba(204, 102, 102, 0.5);
+    color: #cc6666;
+    background: rgba(30, 10, 10, 0.3);
+    font-size: 9px;
+    padding: 7px 8px;
+    letter-spacing: 0.08em;
+}
+.btn.btn-danger:hover {
+    background: rgba(60, 20, 20, 0.5);
+    border-color: #cc6666;
+    color: #ff8888;
+}
+body[data-theme="synthesist"] .btn.btn-danger {
+    color: #cc6666;
+    border-color: rgba(204, 102, 102, 0.5);
+    background: rgba(30, 10, 10, 0.3);
+}
+body[data-theme="synthesist"] .btn.btn-danger:hover {
+    background: rgba(60, 20, 20, 0.5);
+    border-color: #cc6666;
+    color: #ff8888;
+}
+/* Synthesist accent — amber */
+body[data-theme="synthesist"] .group-toggles {
+    border-color: rgba(255, 170, 85, 0.22);
+    box-shadow: inset 0 0 12px rgba(255, 170, 85, 0.05);
+}
+body[data-theme="synthesist"] .group-toggle-btn {
+    /* Off-state uses theme amber at low alpha rather than #a08070 which
+     * read as muddy/brown — theme-tinted off colors read as "this is
+     * inactive, not disabled or broken." */
+    color: rgba(255, 224, 200, 0.40);
+    border-right-color: rgba(255, 170, 85, 0.18);
+}
+body[data-theme="synthesist"] .group-toggle-btn:hover {
+    color: #ffe0c8;
+    background: rgba(255, 170, 85, 0.06);
+}
+body[data-theme="synthesist"] .group-toggle-btn[data-active="1"] {
+    background: linear-gradient(180deg, rgba(255, 170, 85, 0.25), rgba(255, 170, 85, 0.12));
+    color: #ffe0c8;
+    box-shadow: inset 0 -2px 0 rgba(255, 170, 85, 0.9), 0 0 14px rgba(255, 170, 85, 0.2);
+    text-shadow: 0 0 8px rgba(255, 170, 85, 0.55);
+}
+body[data-theme="synthesist"] .group-toggle-btn:hover:not([data-active="1"]) {
+    color: #ffe0c8;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+ *   THEMEABLE ATOMS  (added 1.2)
+ *   These were previously inline-styled in JS (theme-blind). Moved to classes
+ *   with the original values as defaults so themes can override them. The
+ *   Bioclast layer recolors these via body[data-bio="on"] overrides.
+ * ────────────────────────────────────────────────────────────────────────── */
+
+/* Atlas category count "(N)" — was inline #718a99 (the classic subhead color) */
+.wp-cat-count { color: #718a99; }
+body[data-theme="synthesist"] .wp-cat-count { color: #b08070; }
+
+/* Per-row travel airplane in the Atlas list — was inline #6aaa7a */
+.wp-plane { color: #6aaa7a; transition: color 150ms ease; }
+.wp-plane:hover { color: #8acc9a; }
+
+/* Title field uses the shared .wp-edit field design (token-driven). No
+ * separate look — one field design across the app (the description textarea,
+ * the name field, and config inputs all share .wp-edit / the tokens). The
+ * only title-specific tweak is weight/size, set inline in JS. */
+
+/* Text selection — themable rather than the OS default garish blue. Driven
+ * by the accent token so all three themes get it structurally. */
+::selection      { background: rgba(var(--accent-rgb), 0.30); color: #fff; }
+::-moz-selection { background: rgba(var(--accent-rgb), 0.30); color: #fff; }
+
+/* ── Round-3 polish ─────────────────────────────────────────────────────── */
+
+/* Item 11 — Atlas-row delete ×. Destructive, so it stays red across ALL
+ * themes (never themed green). Hover gives a red wash, not the theme color. */
+.wp-del-btn:hover { background: #c0392b; color: #fff; border-color: #c0392b; }
+
+/* Item 23 — radial enum/option text. The discrete option spans (Mono/Size/…,
+ * Classic/Synth, etc.) were missing the pointer cursor and any hover feedback;
+ * the inactive ones especially looked dead. Give them the hand + a hover
+ * brighten so they read as clickable. */
+.toggle-ui .opt { cursor: pointer; transition: color 150ms ease, opacity 150ms ease; }
+.toggle-ui .opt:not(.on):hover { color: rgba(var(--accent-rgb), 0.95); opacity: 1; }
+
+/* Tokenize the modulation-pulse inset glow so it tracks the theme accent
+ * instead of the hardcoded pink/teal pair. */
+.row[data-modulating="true"] .bar {
+    box-shadow: inset 0 0 6px rgba(var(--accent-rgb), 0.25);
+}
+
+/* ── Panel resize: full-width bottom handle ─────────────────────────────────
+ * Grab anywhere along the strip. The live drag moves a fixed accent guide
+ * line (.panel-resize-guide) via transform only — compositor-only, so it
+ * tracks the cursor with zero lag even under full GPU-sim load. The body's
+ * real height commits once on release (see initPanelResize in app.js). */
+.panel-resize-handle {
+    height: 7px;
+    width: 100%;
+    cursor: ns-resize;
+    flex: 0 0 auto;
+    position: relative;
+    border-bottom-left-radius: inherit;
+    border-bottom-right-radius: inherit;
+}
+/* Centered grip ticks — subtle, theme-tinted, brighten on hover/drag. */
+.panel-resize-handle::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: 26px;
+    height: 3px;
+    border-radius: 2px;
+    background: rgba(var(--stroke-rgb), 0.25);
+    transition: background 140ms ease, width 140ms ease;
+}
+.panel-resize-handle:hover::after { background: rgba(var(--stroke-rgb), 0.6); width: 34px; }
+.panel-resize-handle.dragging::after { background: rgba(var(--stroke-rgb), 0.85); }
+/* The drag preview: a fixed full-width accent line showing the new bottom
+ * edge. Transform-translated during the drag; removed on release. */
+.panel-resize-guide {
+    height: 2px;
+    background: rgba(var(--accent-rgb), 0.75);
+    box-shadow: 0 0 8px rgba(var(--accent-rgb), 0.5);
+    border-radius: 2px;
+    pointer-events: none;
+    z-index: 9999;
+    will-change: transform;
+}
+
+/* Footer row at the bottom of the System config tab: store link (left) +
+ * version (right). No divider stroke — kept minimal so it doesn't eat space. */
+.cfg-footer-row {
+    margin-top: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+.cfg-store-link {
+    font-size: 8px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: rgba(var(--accent-rgb), 0.7);
+    text-decoration: none;
+    transition: color 140ms ease, text-shadow 140ms ease;
+}
+.cfg-store-link:hover {
+    color: rgb(var(--accent-rgb));
+    text-shadow: 0 0 8px rgba(var(--accent-rgb), 0.5);
+}
+.cfg-version {
+    font-size: 8px;
+    letter-spacing: 0.1em;
+    text-align: right;
+    color: rgba(var(--stroke-rgb), 0.45);
+    text-transform: uppercase;
+    flex: 0 0 auto;
+}
+
+/* +waypoint / +homepoint header buttons — themeable color + hover text-glow.
+ * (Color was previously only set in the Bioclast layer; give core a token-
+ * driven default so all themes match, and add the glow on hover.) */
+.add-wp-btn, .add-hp-btn {
+    color: rgba(var(--accent-rgb), 0.9);
+    transition: color 140ms ease, text-shadow 140ms ease;
+}
+.add-wp-btn:hover, .add-hp-btn:hover {
+    color: rgb(var(--accent-rgb));
+    text-shadow: 0 0 8px rgba(var(--accent-rgb), 0.6);
+}
