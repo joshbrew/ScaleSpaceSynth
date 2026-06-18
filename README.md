@@ -15,11 +15,12 @@ This is a heavily optimized fork to push the framerates, improve memory/threadin
 
 Music Demos (youtube compression bad):
 
+[https://www.youtube.com/watch?v=k5BFctwdXHI](https://www.youtube.com/watch?v=k5BFctwdXHI)
+
 [https://www.youtube.com/watch?v=gbVG4Wt_z_o](https://www.youtube.com/watch?v=gbVG4Wt_z_o)
 
 [https://www.youtube.com/watch?v=u9d6SfQyXR0](https://www.youtube.com/watch?v=u9d6SfQyXR0)
 
-[https://www.youtube.com/watch?v=k5BFctwdXHI&t=25s](https://www.youtube.com/watch?v=k5BFctwdXHI&t=25s)
 
 <img src="img/Scale-Space-Synthesist-v1.0-Screenshot.png" alt="Scale Space Synthesis" width="1024px" align="center" />
 
