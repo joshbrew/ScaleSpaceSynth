@@ -71,7 +71,7 @@ Native apps require a slightly different workflow
 | I / O | Inversion (compression) |
 | N / M | Scale depth (attraction force) |
 | K / L | Half-life (particle lifespan) |
-| Doouble Left-click canvas | Open Parameters radial menu |
+| Double Left-click canvas | Open Parameters radial menu |
 | Double Right-click canvas | Open Visuals radial menu |
 | Middle-click canvas | Open Config radial menu |
 
