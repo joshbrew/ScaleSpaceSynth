@@ -1,6 +1,6 @@
 <img src="img/synthesistlogo.png" alt="Scale Space Synthesis" width="1024px" align="center" />
 
-# Scale Space Synthesist
+# Scale Space Synthesist (modded with audiovisual fx)
 
 ![status](https://img.shields.io/badge/status-1.0-green) ![license](https://img.shields.io/badge/license-MIT-blue)
 
