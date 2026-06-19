@@ -805,7 +805,17 @@ export function initAudioSourceButton() {
     title.addEventListener('pointerup', endDrag);
     title.addEventListener('pointercancel', endDrag);
 
-    function collectState() {
+    function collectState(changedKeys = null) {
+        const allAudioControlKeys = [
+            'audioUrl', 'audioLoop', 'audioMuted', 'audioReactive', 'audioMonitor',
+            'visualEffects', 'visualEffectStyle', 'visualEffect2DBackdrop', 'visualEffectBackdrop',
+            'visualEffect2DBackdropStyle', 'visualEffect2DBackdropMix', 'visualEffect2DFade',
+            'visualEffect3DFade', 'visualEffectPost', 'visualEffectRandomize', 'audioAutoEnableVisuals',
+            'randomizerSourceMode', 'visualEffectAmount', 'audioParticleDrive',
+            'audioParticleMotionDrive', 'audioParticleColorDrive', 'audioReactiveGain',
+            'audioDeviceId', 'audioOscHz', 'volume', 'perfProfile'
+        ];
+        const editedKeys = Array.isArray(changedKeys) ? changedKeys : allAudioControlKeys;
         window.S.audioUrl = urlInput.value.trim();
         window.S.audioLoop = !!loop.checked;
         window.S.audioMuted = !!mute.checked;
@@ -832,6 +842,7 @@ export function initAudioSourceButton() {
         window.S.audioOscHz = Number(hzInput.value) || 220;
         window.S.volume = Number(volume.value) || 0;
         window.S.perfProfile = perfSelect.value || 'balanced';
+        if (window.markRandomizerLiveEdit) window.markRandomizerLiveEdit(editedKeys);
         _saveState();
         try { if (window.syncTogglesFromState) window.syncTogglesFromState(); } catch (e) {}
         try { if (window.refreshRadialUI) window.refreshRadialUI(); } catch (e) {}
@@ -902,6 +913,7 @@ export function initAudioSourceButton() {
     function commitTransitionInput({ normalize = false, restart = false } = {}) {
         const sec = _transitionSecondsFrom(transitionInput, window.S.randomizerTransitionSec ?? 6.0);
         window.S.randomizerTransitionSec = sec;
+        if (window.markRandomizerLiveEdit) window.markRandomizerLiveEdit('randomizerTransitionSec');
         if (normalize) transitionInput.value = _formatTransitionSeconds(sec);
         _saveState();
         if (typeof window.updateContinuousRandomizationTransitionSec === 'function') {
@@ -1074,6 +1086,7 @@ export function initAudioSourceButton() {
         // snap the checkbox back off before setContinuousRandomization runs.
         window.S.randomizerContinuous = on;
         window.S.randomizerTransitionSec = sec;
+        if (window.markRandomizerLiveEdit) window.markRandomizerLiveEdit(['randomizerContinuous', 'randomizerTransitionSec']);
         _saveState();
         try { if (window.syncTogglesFromState) window.syncTogglesFromState(); } catch (e) {}
         setContinuousRandomization(on, { transitionSec: sec });
@@ -1165,30 +1178,30 @@ export function initAudioSourceButton() {
         updateUI();
     });
 
-    urlInput.addEventListener('change', collectState);
-    micSelect.addEventListener('change', collectState);
-    hzInput.addEventListener('change', collectState);
-    loop.addEventListener('change', collectState);
-    mute.addEventListener('change', collectState);
-    reactive.addEventListener('change', collectState);
-    monitor.addEventListener('change', collectState);
-    fxToggle.addEventListener('change', collectState);
-    fxSelect.addEventListener('change', collectState);
-    fx2DToggle.addEventListener('change', collectState);
-    fx2DSelect.addEventListener('change', collectState);
-    fx3DToggle.addEventListener('change', collectState);
-    fx2DMix.addEventListener('input', collectState);
-    fx2DFade.addEventListener('input', collectState);
-    fx3DFade.addEventListener('input', collectState);
-    fxRand.addEventListener('change', collectState);
-    autoFx.addEventListener('change', collectState);
-    sourceModeSelect.addEventListener('change', collectState);
-    fxAmount.addEventListener('input', collectState);
-    audioParticleDrive.addEventListener('input', collectState);
-    audioParticleMotionDrive.addEventListener('input', collectState);
-    audioParticleColorDrive.addEventListener('input', collectState);
-    audioReactiveGain.addEventListener('input', collectState);
-    volume.addEventListener('input', collectState);
+    urlInput.addEventListener('change', () => collectState(['audioUrl']));
+    micSelect.addEventListener('change', () => collectState(['audioDeviceId']));
+    hzInput.addEventListener('change', () => collectState(['audioOscHz']));
+    loop.addEventListener('change', () => collectState(['audioLoop']));
+    mute.addEventListener('change', () => collectState(['audioMuted']));
+    reactive.addEventListener('change', () => collectState(['audioReactive']));
+    monitor.addEventListener('change', () => collectState(['audioMonitor']));
+    fxToggle.addEventListener('change', () => collectState(['visualEffects']));
+    fxSelect.addEventListener('change', () => collectState(['visualEffectStyle']));
+    fx2DToggle.addEventListener('change', () => collectState(['visualEffect2DBackdrop', 'visualEffectBackdrop']));
+    fx2DSelect.addEventListener('change', () => collectState(['visualEffect2DBackdropStyle']));
+    fx3DToggle.addEventListener('change', () => collectState(['visualEffectPost']));
+    fx2DMix.addEventListener('input', () => collectState(['visualEffect2DBackdropMix']));
+    fx2DFade.addEventListener('input', () => collectState(['visualEffect2DFade']));
+    fx3DFade.addEventListener('input', () => collectState(['visualEffect3DFade']));
+    fxRand.addEventListener('change', () => collectState(['visualEffectRandomize']));
+    autoFx.addEventListener('change', () => collectState(['audioAutoEnableVisuals']));
+    sourceModeSelect.addEventListener('change', () => collectState(['randomizerSourceMode']));
+    fxAmount.addEventListener('input', () => collectState(['visualEffectAmount']));
+    audioParticleDrive.addEventListener('input', () => collectState(['audioParticleDrive']));
+    audioParticleMotionDrive.addEventListener('input', () => collectState(['audioParticleMotionDrive']));
+    audioParticleColorDrive.addEventListener('input', () => collectState(['audioParticleColorDrive']));
+    audioReactiveGain.addEventListener('input', () => collectState(['audioReactiveGain']));
+    volume.addEventListener('input', () => collectState(['volume']));
     perfSelect.addEventListener('change', () => {
         collectState();
         setPerformanceProfile(perfSelect.value);

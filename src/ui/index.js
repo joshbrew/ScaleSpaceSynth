@@ -1152,6 +1152,7 @@ function makeSlider(p, label, subhead, ll, lr, key, min, max, step, cb) {
             glyph.textContent = kind === 'randomizer' ? 'R' : 'A';
             pilot.addEventListener('change', () => {
                 window.S[stateKey] = !!pilot.checked;
+                if (window.markRandomizerLiveEdit) window.markRandomizerLiveEdit(stateKey);
                 if (!pilot.checked && typeof onDisable === 'function') onDisable();
                 try { localStorage.setItem('ss_state', JSON.stringify(window.S)); } catch (e) {}
                 if (kind === 'randomizer' && window.syncRandomizerPilotTogglesFromState) window.syncRandomizerPilotTogglesFromState();
@@ -1216,6 +1217,7 @@ function makeSlider(p, label, subhead, ll, lr, key, min, max, step, cb) {
 
     const updateVal = (val, isProgrammatic = false) => {
         window.S[key] = parseFloat(val);
+        if (!isProgrammatic && window.markRandomizerLiveEdit) window.markRandomizerLiveEdit(key);
         syncParamKey(key, window.S[key]);
         if (cb) cb(window.S[key]);
         // Live readout toast: shows "Label: value" in the center-anchor
@@ -1388,21 +1390,27 @@ function makeSlider(p, label, subhead, ll, lr, key, min, max, step, cb) {
 
 function setRandomizerPilotKeys(keys, enabled) {
     const list = Array.isArray(keys) ? keys : [keys];
+    const edited = [];
     for (const key of list) {
         const pilotKey = randomizerPilotStateKey(key);
         window.S[pilotKey] = !!enabled;
+        edited.push(pilotKey);
     }
+    if (window.markRandomizerLiveEdit) window.markRandomizerLiveEdit(edited);
     try { localStorage.setItem('ss_state', JSON.stringify(window.S)); } catch (e) {}
     if (window.syncRandomizerPilotTogglesFromState) window.syncRandomizerPilotTogglesFromState();
 }
 
 function setAudioPilotKeys(keys, enabled) {
     const list = Array.isArray(keys) ? keys : [keys];
+    const edited = [];
     for (const key of list) {
         const pilotKey = audioPilotStateKey(key);
         window.S[pilotKey] = !!enabled;
+        edited.push(pilotKey);
         if (!enabled && window.S_effective) delete window.S_effective[key];
     }
+    if (window.markRandomizerLiveEdit) window.markRandomizerLiveEdit(edited);
     try { localStorage.setItem('ss_state', JSON.stringify(window.S)); } catch (e) {}
     if (window.syncAudioPilotTogglesFromState) window.syncAudioPilotTogglesFromState();
 }
@@ -1649,6 +1657,7 @@ export function makeGroupToggles(p, items) {
                     }
                 }
 
+                if (window.markRandomizerLiveEdit) window.markRandomizerLiveEdit([itm.key, itm.visibilityKey]);
                 if (itm.cb) itm.cb();
                 // Fire updaters for BOTH the discrete key and the
                 // visibility key — covers the radial menu's listener for
@@ -1673,6 +1682,7 @@ export function makeGroupToggles(p, items) {
             if (isColorModeFade) {
                 // Tour-stop check first, same ordering rule as below.
                 if (tour && tour.active && TOUR_STOPPING_KEYS.has(itm.key)) stopTour();
+                if (window.markRandomizerLiveEdit) window.markRandomizerLiveEdit(itm.key);
                 fadeColorModeChange(itm.matchVal);
                 if (itm.cb) itm.cb();
                 const updaters = window._toggleUpdaters && window._toggleUpdaters[itm.key];
@@ -1687,6 +1697,7 @@ export function makeGroupToggles(p, items) {
             else {
                 window.S[itm.key] = !wasOn;
             }
+            if (window.markRandomizerLiveEdit) window.markRandomizerLiveEdit(itm.key);
 
             // Only cancel an active tour if this toggle actually affects what
             // the tour is animating. Theme switches, button-shape changes,
@@ -1763,6 +1774,7 @@ export function makeToggle(p, label, key, color, cb) {
     d.addEventListener('click', () => {
         const wasOn = !!window.S[key];
         window.S[key] = !wasOn;
+        if (window.markRandomizerLiveEdit) window.markRandomizerLiveEdit(key);
         d.style.background = window.S[key] ? color + '22' : 'rgba(10,10,24,0.8)';
         d.style.border = '1px solid ' + (window.S[key] ? color : 'rgba(40,40,70,0.6)');
         d.style.color = window.S[key] ? color : '#8899aa';
@@ -1917,6 +1929,7 @@ export function buildUI(engine) {
     continuousRandom.addEventListener('click', () => {
         const next = !window.S.randomizerContinuous;
         window.S.randomizerContinuous = next;
+        if (window.markRandomizerLiveEdit) window.markRandomizerLiveEdit('randomizerContinuous');
         try { localStorage.setItem('ss_state', JSON.stringify(window.S)); } catch (e) {}
         if (window.setContinuousRandomization) {
             window.setContinuousRandomization(next, { transitionSec: window.S.randomizerTransitionSec || 6.0 });

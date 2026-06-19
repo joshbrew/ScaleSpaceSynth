@@ -12,7 +12,8 @@ import {
     randomizerPilotStateKey,
     isAudioPilotEnabled,
     isRandomizerPilotEnabled,
-    sanitizeAudioWaypointState
+    sanitizeAudioWaypointState,
+    AUDIO_WAYPOINT_KEYS
 } from '../audio/pilot.js';
 const SAFE_RANDOM_RANGES = {
     tempo:       { min: 0.08,  max: 3.25, step: 0.01, curve: 'linear' },
@@ -90,6 +91,10 @@ const USER_CONTROLLED_AUDIO_MENU_KEYS = [
     'randomizerSourceMode',
     'audioAutoEnableVisuals'
 ];
+const LIVE_EDIT_OWNED_TRANSITION_KEYS = new Set([
+    ...USER_CONTROLLED_AUDIO_MENU_KEYS,
+    ...AUDIO_WAYPOINT_KEYS,
+]);
 const RANDOMIZER_FX_KEYS = [
     'compatFlowMode',
     'visualEffectStyle',
@@ -256,8 +261,7 @@ function _respectAudioPilotLocks(settings, opts = {}) {
     }
 
     if (opts.applyRandomizerSourceMode !== true) {
-        if (['true-random', 'atlas-codes', 'both'].includes(liveSourceMode)) filtered.randomizerSourceMode = liveSourceMode;
-        else delete filtered.randomizerSourceMode;
+        delete filtered.randomizerSourceMode;
     }
 
     if (_shouldRespectAudioPilot(opts) && window.S?.visualEffectRandomize === false) {
@@ -1069,6 +1073,20 @@ export function describeRandomizerPreset(id) {
 
 let _transitionRAF = null;
 let _transitionToken = 0;
+let _transitionLiveEditKeys = null;
+
+function _markRandomizerLiveEdit(keys) {
+    if (!_transitionLiveEditKeys) return;
+    const list = Array.isArray(keys) ? keys : [keys];
+    for (const key of list) {
+        if (typeof key === 'string' && key) _transitionLiveEditKeys.add(key);
+    }
+}
+
+if (typeof window !== 'undefined') {
+    window.markRandomizerLiveEdit = _markRandomizerLiveEdit;
+}
+
 const _continuous = {
     active: false,
     transitionSec: 6.0,
@@ -1176,6 +1194,7 @@ function _syncKeys(keys) {
     }
     try { if (window.syncTogglesFromState) window.syncTogglesFromState(); } catch (e) { console.error(e); }
     try { if (window.syncAudioPilotTogglesFromState) window.syncAudioPilotTogglesFromState(); } catch (e) { console.error(e); }
+    try { if (window.syncRandomizerPilotTogglesFromState) window.syncRandomizerPilotTogglesFromState(); } catch (e) { console.error(e); }
     try { if (window.refreshRadialUI) window.refreshRadialUI(); } catch (e) { console.error(e); }
 }
 
@@ -1357,6 +1376,7 @@ function _easeInOut(t) {
 
 function _cancelTransition() {
     _transitionToken++;
+    _transitionLiveEditKeys = null;
     if (_transitionRAF) {
         cancelAnimationFrame(_transitionRAF);
         _transitionRAF = null;
@@ -1378,6 +1398,13 @@ function _transitionToSnapshot(settings, opts = {}) {
     const numericKeys = Object.keys(filteredClean).filter(k => typeof filteredClean[k] === 'number' && typeof from[k] === 'number');
     const discreteKeys = Object.keys(filteredClean).filter(k => !numericKeys.includes(k));
     const changed = new Set(Object.keys(filteredClean).filter(k => window.S[k] !== filteredClean[k]));
+    const liveOwnedKeys = new Set(Object.keys(filteredClean).filter(key => LIVE_EDIT_OWNED_TRANSITION_KEYS.has(key)));
+    const ownedStartValues = new Map();
+    const ownedLastWritten = new Map();
+    const ownedUserEdited = new Set();
+    const liveEditKeys = new Set();
+    _transitionLiveEditKeys = liveEditKeys;
+    for (const key of liveOwnedKeys) ownedStartValues.set(key, window.S[key]);
     const token = ++_transitionToken;
     const start = performance.now();
     const duration = transitionSec * 1000;
@@ -1385,26 +1412,57 @@ function _transitionToSnapshot(settings, opts = {}) {
     let lastUISync = 0;
 
     return new Promise((resolve) => {
+        const sameTransitionValue = (a, b) => {
+            if (typeof a === 'number' || typeof b === 'number') {
+                const an = Number(a);
+                const bn = Number(b);
+                return Number.isFinite(an) && Number.isFinite(bn) && Math.abs(an - bn) < 1e-7;
+            }
+            return a === b;
+        };
+        const writeTransitionValue = (key, value) => {
+            if (!_canPilotKey(key, opts)) return false;
+            // UI edits are scoped to this one transition/roll. The active target
+            // stops writing those keys immediately, then the next randomizer roll
+            // starts with a fresh liveEditKeys set so randomization keeps working.
+            if (liveEditKeys.has(key)) {
+                ownedUserEdited.add(key);
+                return false;
+            }
+            if (liveOwnedKeys.has(key)) {
+                const expected = ownedLastWritten.has(key) ? ownedLastWritten.get(key) : ownedStartValues.get(key);
+                if (!sameTransitionValue(window.S[key], expected)) {
+                    ownedUserEdited.add(key);
+                    liveEditKeys.add(key);
+                    return false;
+                }
+            }
+            window.S[key] = value;
+            if (liveOwnedKeys.has(key)) ownedLastWritten.set(key, value);
+            return true;
+        };
+
         const tick = (now) => {
-            if (token !== _transitionToken) return resolve(null);
+            if (token !== _transitionToken) {
+                if (_transitionLiveEditKeys === liveEditKeys) _transitionLiveEditKeys = null;
+                return resolve(null);
+            }
             const rawT = Math.min(1, (now - start) / duration);
             const ease = _easeInOut(rawT);
 
             for (const key of numericKeys) {
-                if (!_canPilotKey(key, opts)) continue;
-                window.S[key] = from[key] + (filteredClean[key] - from[key]) * ease;
+                const value = from[key] + (filteredClean[key] - from[key]) * ease;
+                writeTransitionValue(key, value);
             }
 
             if (!flipped && rawT >= 0.5) {
-                for (const key of discreteKeys) {
-                    if (_canPilotKey(key, opts)) window.S[key] = filteredClean[key];
-                }
+                for (const key of discreteKeys) writeTransitionValue(key, filteredClean[key]);
                 flipped = true;
-                _syncKeys(discreteKeys);
+                _syncKeys(discreteKeys.filter(key => !ownedUserEdited.has(key)));
             }
 
             if (now - lastUISync > 90 || rawT >= 1) {
-                _syncKeys(numericKeys);
+                _syncKeys(numericKeys.filter(key => !ownedUserEdited.has(key)));
                 lastUISync = now;
             }
 
@@ -1419,15 +1477,19 @@ function _transitionToSnapshot(settings, opts = {}) {
             }
 
             for (const [key, value] of Object.entries(filteredClean)) {
-                if (_canPilotKey(key, opts)) window.S[key] = value;
+                writeTransitionValue(key, value);
+            }
+            for (const key of ownedUserEdited) {
+                if (Object.prototype.hasOwnProperty.call(filteredClean, key)) filteredClean[key] = window.S[key];
             }
             _clearDisabledAudioPilotEffective();
-            _syncKeys([...changed]);
+            _syncKeys([...changed].filter(key => !ownedUserEdited.has(key)));
             _applyEngineSideEffects(changed, { resize: true, reinitialize: opts.reinitialize === true });
             _restartOscIfNeeded(changed);
             _transitionRAF = null;
+            if (_transitionLiveEditKeys === liveEditKeys) _transitionLiveEditKeys = null;
             _saveState();
-            resolve({ settings: filteredClean, changed });
+            resolve({ settings: filteredClean, changed, userEdited: ownedUserEdited });
         };
         _transitionRAF = requestAnimationFrame(tick);
     });
