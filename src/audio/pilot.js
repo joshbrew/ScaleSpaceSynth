@@ -225,11 +225,16 @@ const baseAudioDefaults = {
     audioAutoEnableVisuals: true
 };
 
-export function applyAudioWaypointState(raw, S = (typeof window !== 'undefined' ? window.S || {} : {})) {
+export function applyAudioWaypointState(raw, S = (typeof window !== 'undefined' ? window.S || {} : {}), opts = {}) {
     const state = sanitizeAudioWaypointState(raw, S);
     if (!state) return false;
 
+    const applyRandomizerPilotMask = opts.applyRandomizerPilotMask === true;
+    const applyRandomizerSourceMode = opts.applyRandomizerSourceMode === true;
+
     for (const [key, value] of Object.entries(state)) {
+        if (!applyRandomizerPilotMask && key.startsWith('randomizerPilot_')) continue;
+        if (!applyRandomizerSourceMode && key === 'randomizerSourceMode') continue;
         S[key] = value;
         try {
             if (typeof window !== 'undefined' && window.sliderSync && typeof window.sliderSync[key] === 'function') {

@@ -146,12 +146,15 @@ function _isAtlasRandomizerApply(opts = {}) {
 }
 
 function _shouldRespectAudioPilot(opts = {}) {
-    if (_isAtlasRandomizerApply(opts)) return false;
-    return opts.respectAudioPilot !== false && (
+    if (opts.respectAudioPilot === false) return false;
+    return (
         opts.continuous === true ||
         opts.source === 'randomizer' ||
+        opts.source === 'atlas-randomizer' ||
+        opts.source === 'continuous-atlas' ||
         opts.source === 'preset' ||
         opts.source === 'history' ||
+        opts.applyAtlasWaypointState === true ||
         opts.sourceMode !== undefined
     );
 }
@@ -220,7 +223,7 @@ function _randomizerApplyOptions(opts = {}, picked = {}) {
         return {
             ...opts,
             source: opts.continuous ? 'continuous-atlas' : 'atlas-randomizer',
-            respectAudioPilot: false,
+            respectAudioPilot: true,
             preserveAudioMenuState: false,
             preserveRandomizerSourceMode: true,
             applyAtlasWaypointState: true,
@@ -234,6 +237,12 @@ function _respectAudioPilotLocks(settings, opts = {}) {
     const filtered = { ...settings };
     const liveSourceMode = window.S?.randomizerSourceMode;
     const randomizePilotMask = opts.randomizeAudioPilotMask === true;
+    const applyRandomizerPilotMask = opts.applyRandomizerPilotMask === true;
+
+    if (!applyRandomizerPilotMask) {
+        for (const key of RANDOMIZER_PILOT_STATE_KEYS) delete filtered[key];
+    }
+
     if (_shouldRespectAudioPilot(opts)) {
         for (const key of AUDIO_PILOT_KEYS) {
             if (!isRandomizerPilotEnabled(key)) delete filtered[key];
@@ -245,10 +254,12 @@ function _respectAudioPilotLocks(settings, opts = {}) {
             delete filtered[key];
         }
     }
-    if (opts.preserveRandomizerSourceMode === true) {
+
+    if (opts.applyRandomizerSourceMode !== true) {
         if (['true-random', 'atlas-codes', 'both'].includes(liveSourceMode)) filtered.randomizerSourceMode = liveSourceMode;
         else delete filtered.randomizerSourceMode;
     }
+
     if (_shouldRespectAudioPilot(opts) && window.S?.visualEffectRandomize === false) {
         for (const key of RANDOMIZER_FX_KEYS) {
             delete filtered[key];
