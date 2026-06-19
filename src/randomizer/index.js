@@ -68,6 +68,8 @@ const NUMERIC_VISUAL_KEYS = [
     'visualEffectAmount', 'visualEffectQuality', 'visualEffectEcho', 'visualEffectAberration', 'visualEffectRings', 'visualEffectExpressivity', 'visualEffectDynamics',
     'visualEffect2DBackdropMix', 'visualEffect2DFade', 'visualEffect3DFade'
 ];
+const NON_RANDOMIZED_FX_FADE_KEYS = ['visualEffect2DFade', 'visualEffect3DFade'];
+const NUMERIC_VISUAL_RANDOMIZER_KEYS = NUMERIC_VISUAL_KEYS.filter(key => !NON_RANDOMIZED_FX_FADE_KEYS.includes(key));
 const RANDOM_NUMERIC_AUDIO_KEYS = ['audioOscHz', 'audioFxGain'];
 const NUMERIC_AUDIO_KEYS = [...RANDOM_NUMERIC_AUDIO_KEYS, ...AUDIO_REACTIVE_CONTROL_KEYS];
 const AUDIO_PILOT_STATE_KEYS = AUDIO_PILOT_KEYS.map(key => audioPilotStateKey(key));
@@ -178,6 +180,7 @@ function _continuousAudioPilotMaskSettings() {
     let enabledCount = 0;
 
     for (const key of AUDIO_PILOT_KEYS) {
+        if (NON_RANDOMIZED_FX_FADE_KEYS.includes(key)) continue;
         const stateKey = audioPilotStateKey(key);
         const current = window.S && typeof window.S[stateKey] === 'boolean'
             ? window.S[stateKey] !== false
@@ -198,9 +201,10 @@ function _continuousAudioPilotMaskSettings() {
         if (out[stateKey]) enabledCount++;
     }
 
-    const minEnabled = Math.max(5, Math.floor(AUDIO_PILOT_KEYS.length * 0.28));
-    while (enabledCount < minEnabled) {
-        const key = _pick(AUDIO_PILOT_KEYS.filter(k => k !== 'showParticles'));
+    const mutablePilotKeys = AUDIO_PILOT_KEYS.filter(k => k !== 'showParticles' && !NON_RANDOMIZED_FX_FADE_KEYS.includes(k));
+    const minEnabled = Math.max(5, Math.floor(mutablePilotKeys.length * 0.28));
+    while (enabledCount < minEnabled && mutablePilotKeys.length) {
+        const key = _pick(mutablePilotKeys);
         const stateKey = audioPilotStateKey(key);
         if (out[stateKey] !== true) {
             out[stateKey] = true;
@@ -1601,7 +1605,7 @@ function _generateTrueRandomSettings({ includeAudio = true, includeVisuals = tru
     const settings = {};
 
     if (includeVisuals) {
-        for (const key of NUMERIC_VISUAL_KEYS) {
+        for (const key of NUMERIC_VISUAL_RANDOMIZER_KEYS) {
             settings[key] = continuous
                 ? _randomNearbyValue(key, SAFE_RANDOM_RANGES[key])
                 : _randomValue(key, SAFE_RANDOM_RANGES[key]);
