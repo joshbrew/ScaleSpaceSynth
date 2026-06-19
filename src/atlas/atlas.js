@@ -167,6 +167,7 @@ function buildTargetParams(toP = {}, toV = {}) {
     PARAM_KEYS.forEach(k => {
         if (toP && toP[k] !== undefined) params[k] = toP[k];
         else if (toV && toV[k] !== undefined) params[k] = toV[k];
+        else if (k === 'physicsEmergence') params[k] = 0;
         if (k === 'coherence' && params[k] !== undefined) params[k] = Math.max(0, Number(params[k]) || 0);
     });
     return params;

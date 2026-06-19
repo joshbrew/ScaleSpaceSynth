@@ -59,6 +59,7 @@ export function validateWaypoint(w) {
         if (!_isFiniteNumber(inParams[k])) return;
         out.params[k] = (k === 'coherence') ? Math.max(0, Math.min(200, inParams[k])) : inParams[k];
     });
+    if (!_isFiniteNumber(out.params.physicsEmergence)) out.params.physicsEmergence = 0;
 
     // Optics — explicit allowlist + per-key type rules.
     const inV = (w.optics && typeof w.optics === 'object' && !Array.isArray(w.optics)) ? w.optics : {};

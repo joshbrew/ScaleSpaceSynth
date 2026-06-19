@@ -1447,6 +1447,7 @@ function _settingsFromWaypoint(wp, { includeAudio = true, includeVisuals = true 
         // Imported/old atlas codes may carry the deprecated invalid negative-coherence bug.
         // Keep treating negative coherence as no-coherence, but do NOT touch signed Turbulence.
         if (Number.isFinite(Number(raw.coherence)) && Number(raw.coherence) < 0) raw.coherence = 0;
+        if (!Number.isFinite(Number(raw.physicsEmergence))) raw.physicsEmergence = 0;
     }
     if (includeAudio) {
         const audioState = sanitizeAudioWaypointState(optics.audio || wp.audio || optics);
