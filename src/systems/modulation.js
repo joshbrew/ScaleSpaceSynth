@@ -6,15 +6,17 @@ import { MODULATABLE_KEYS } from '../atlas/constants.js';
 // Range cache; populated by makeSlider when each control is built. Used to compute amplitude as a percentage of the parameter's full range.
 window._paramRanges = window._paramRanges || {};
 
-window.S_effective = {};
+window.S_effective = (window.S_effective && typeof window.S_effective === 'object') ? window.S_effective : {};
 
 export function updateModulation() {
+    const S = (window.S && typeof window.S === 'object') ? window.S : {};
+    const Eff = (window.S_effective && typeof window.S_effective === 'object') ? window.S_effective : (window.S_effective = {});
     const t = performance.now() / 1000;
     for (const key of MODULATABLE_KEYS) {
-        const mod = window.S[key + '_mod'] || 0;
+        const mod = Number(S[key + '_mod']) || 0;
         const row = document.querySelector(`.row[data-param-key="${key}"]`);
         if (mod <= 0.001) {
-            if (window.S_effective[key] !== undefined) delete window.S_effective[key];
+            if (Eff[key] !== undefined) delete Eff[key];
             if (row && row.dataset.modulating) delete row.dataset.modulating;
             continue;
         }
@@ -26,7 +28,7 @@ export function updateModulation() {
         // 	mod = 0.5 → slow oscillation at ~0.25 Hz (one cycle every 4s)
         // 	mod = 1.0 → fast oscillation at ~1.0 Hz (one cycle per second)
         // Frequency curve is linear from 0.1 Hz (at mod≈0.05) up to 1.0 Hz. Amplitude is fixed by the 50%-100%-of-base rule; mod only changes SPEED. This matches "expected" synthesizer modulation behavior.
-        const base = window.S[key];
+        const base = Number(S[key]) || 0;
         const freq = 0.1 + mod * 0.9; // 0.1 Hz at very low mod, 1.0 Hz at max
 
         const phase = Math.sin(2 * Math.PI * freq * t);
@@ -36,7 +38,7 @@ export function updateModulation() {
         // Clamp into the parameter's legal range
         if (v < range.min) v = range.min;
         if (v > range.max) v = range.max;
-        window.S_effective[key] = v;
+        Eff[key] = v;
         if (row && row.dataset.modulating !== 'true') row.dataset.modulating = 'true';
     }
 }

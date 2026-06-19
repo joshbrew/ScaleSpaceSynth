@@ -455,7 +455,7 @@ export function applyWaypointImmediate(wp, options = {}) {
     if (window.tour && window.tour.active && typeof stopTour === 'function') stopTour();
     stopContinuousRandomizerForWaypointTravel();
     window.transition = null;
-    window.S_effective = null;
+    window.S_effective = {};
     delete window.S._xfade;
     delete window.S._xfadeEnv;
     if (window._xfadeColorModeTimer) {
