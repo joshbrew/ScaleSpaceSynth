@@ -703,6 +703,18 @@ export function initAudioSourceButton() {
     fxAmount.value = String(window.S.visualEffectAmount ?? 1.05);
     panel.appendChild(_mkRangeRow('FX Amount', fxAmount));
 
+    const audioParticleDrive = _rangeInput(window.S.audioParticleDrive ?? 1.0, 0, 3, 0.01);
+    panel.appendChild(_mkRangeRow('Param Drive', audioParticleDrive));
+
+    const audioParticleMotionDrive = _rangeInput(window.S.audioParticleMotionDrive ?? 1.0, 0, 3, 0.01);
+    panel.appendChild(_mkRangeRow('Motion Drive', audioParticleMotionDrive));
+
+    const audioParticleColorDrive = _rangeInput(window.S.audioParticleColorDrive ?? 1.0, 0, 3, 0.01);
+    panel.appendChild(_mkRangeRow('Color Drive', audioParticleColorDrive));
+
+    const audioReactiveGain = _rangeInput(window.S.audioReactiveGain ?? 5.2, 0, 16, 0.01);
+    panel.appendChild(_mkRangeRow('Input Gain', audioReactiveGain));
+
     const actionRow = document.createElement('div');
     actionRow.className = 'audio-source-row';
     const startBtn = _mkButton('Start', 'audio-source-action');
@@ -812,6 +824,10 @@ export function initAudioSourceButton() {
         window.S.audioAutoEnableVisuals = !!autoFx.checked;
         window.S.randomizerSourceMode = ['true-random', 'atlas-codes', 'both'].includes(sourceModeSelect.value) ? sourceModeSelect.value : 'both';
         window.S.visualEffectAmount = Number(fxAmount.value) || 0;
+        window.S.audioParticleDrive = Math.max(0, Math.min(3, Number(audioParticleDrive.value) || 0));
+        window.S.audioParticleMotionDrive = Math.max(0, Math.min(3, Number(audioParticleMotionDrive.value) || 0));
+        window.S.audioParticleColorDrive = Math.max(0, Math.min(3, Number(audioParticleColorDrive.value) || 0));
+        window.S.audioReactiveGain = Math.max(0, Math.min(16, Number(audioReactiveGain.value) || 0));
         window.S.audioDeviceId = micSelect.value || '';
         window.S.audioOscHz = Number(hzInput.value) || 220;
         window.S.volume = Number(volume.value) || 0;
@@ -849,7 +865,11 @@ export function initAudioSourceButton() {
         if (typeof autoFx !== 'undefined') autoFx.checked = window.S.audioAutoEnableVisuals !== false;
         if (typeof sourceModeSelect !== 'undefined') sourceModeSelect.value = window.S.randomizerSourceMode || 'both';
         fxAmount.value = String(window.S.visualEffectAmount ?? 1.05);
-        [volume, fx2DMix, fx2DFade, fx3DFade, fxAmount].forEach((input) => {
+        audioParticleDrive.value = String(window.S.audioParticleDrive ?? 1.0);
+        audioParticleMotionDrive.value = String(window.S.audioParticleMotionDrive ?? 1.0);
+        audioParticleColorDrive.value = String(window.S.audioParticleColorDrive ?? 1.0);
+        audioReactiveGain.value = String(window.S.audioReactiveGain ?? 5.2);
+        [volume, fx2DMix, fx2DFade, fx3DFade, fxAmount, audioParticleDrive, audioParticleMotionDrive, audioParticleColorDrive, audioReactiveGain].forEach((input) => {
             try { if (input && typeof input._syncAudioSourceValue === 'function') input._syncAudioSourceValue(); } catch (e) {}
         });
         const continuousState = getContinuousRandomizationState();
@@ -1164,6 +1184,10 @@ export function initAudioSourceButton() {
     autoFx.addEventListener('change', collectState);
     sourceModeSelect.addEventListener('change', collectState);
     fxAmount.addEventListener('input', collectState);
+    audioParticleDrive.addEventListener('input', collectState);
+    audioParticleMotionDrive.addEventListener('input', collectState);
+    audioParticleColorDrive.addEventListener('input', collectState);
+    audioReactiveGain.addEventListener('input', collectState);
     volume.addEventListener('input', collectState);
     perfSelect.addEventListener('change', () => {
         collectState();

@@ -2616,3 +2616,84 @@ body[data-theme="synthesist"] .wp-cat-count { color: #b08070; }
     color: rgb(var(--accent-rgb));
     text-shadow: 0 0 8px rgba(var(--accent-rgb), 0.6);
 }
+
+/* Dual pilot toggles: R = randomizer permission, A = audio modulation permission. */
+.row[data-pilot-row="1"] {
+    grid-template-columns: 1fr auto auto auto;
+}
+.pilot-toggle {
+    justify-self: end;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    height: 16px;
+    min-width: 24px;
+    padding: 0 3px;
+    border-radius: 999px;
+    opacity: 0.86;
+    box-sizing: border-box;
+}
+.pilot-toggle input {
+    width: 10px;
+    height: 10px;
+    margin: 0;
+    cursor: pointer;
+}
+.pilot-toggle .pilot-glyph {
+    font-size: 7px;
+    line-height: 1;
+    font-weight: 800;
+    letter-spacing: 0;
+    pointer-events: none;
+}
+.randomizer-pilot-toggle {
+    color: #82b7ff;
+    border: 1px solid rgba(130, 183, 255, calc(0.34 * var(--btn-alpha, 1)));
+    background: rgba(80, 136, 255, calc(0.09 * var(--btn-alpha, 1)));
+}
+.randomizer-pilot-toggle input { accent-color: #82b7ff; }
+.audio-pilot-toggle,
+.audio-pilot-toggle.audio-pilot-toggle {
+    color: #6dffb0;
+    border: 1px solid rgba(109, 255, 176, calc(0.34 * var(--btn-alpha, 1)));
+    background: rgba(80, 255, 160, calc(0.08 * var(--btn-alpha, 1)));
+}
+.audio-pilot-toggle input { accent-color: #6dffb0; }
+.pilot-toggle:hover { opacity: 1; }
+.section.pilot-section {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+.section.pilot-section .pilot-toggle:first-of-type {
+    margin-left: auto;
+}
+.params-randomizer-footer {
+    margin-top: 2px;
+    margin-bottom: 10px;
+}
+.params-randomizer-footer .button-row-btn {
+    min-width: 90px;
+}
+.params-randomizer-footer .params-randomize-now {
+    color: rgba(255, 217, 128, 0.84);
+    border-color: rgba(255, 190, 80, calc(0.42 * var(--btn-alpha, 1)));
+    background: rgba(255, 170, 60, calc(0.07 * var(--btn-alpha, 1)));
+}
+.params-randomizer-footer .params-randomize-now:hover {
+    color: #ffe6ad;
+    border-color: rgba(255, 210, 110, calc(0.70 * var(--btn-alpha, 1)));
+    background: rgba(255, 185, 70, calc(0.14 * var(--btn-alpha, 1)));
+}
+.params-randomizer-footer .params-continuous-random[data-active="1"] {
+    color: #d6c3ff;
+    border-color: rgba(180, 135, 255, calc(0.72 * var(--btn-alpha, 1)));
+    background: rgba(160, 110, 255, calc(0.24 * var(--btn-alpha, 1)));
+    box-shadow: 0 0 10px rgba(160, 110, 255, calc(0.22 * var(--btn-alpha, 1)));
+}
+.pilot-toggle.audio-pilot-toggle,
+.pilot-toggle.randomizer-pilot-toggle {
+    width: auto;
+    margin-right: 0;
+}

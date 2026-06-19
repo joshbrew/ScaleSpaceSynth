@@ -23,6 +23,12 @@ export function buildExportPayload(opts) {
     // Round numeric values to remove float noise. Different parameters have very different sane precisions, so we use a small lookup.
     const PRECISION = {
         opacity: 2, panelOpacity: 2, buttonOpacity: 2, volume: 2, audioFxGain: 2,
+        audioReactiveAmount: 2, audioReactiveGain: 2, audioReactiveAttack: 3, audioReactiveRelease: 3,
+        audioReactiveRelaxation: 2, audioColorBeat: 2, audioParticleDrive: 2,
+        audioParticleMotionDrive: 2, audioParticleColorDrive: 2,
+        visualEffectAmount: 2, visualEffectQuality: 2, visualEffectEcho: 2, visualEffectAberration: 2,
+        visualEffectRings: 2, visualEffectExpressivity: 2, visualEffectDynamics: 2,
+        visualEffect2DBackdropMix: 2, visualEffect2DFade: 2, visualEffect3DFade: 2,
         sat: 2, lightness: 2, hue: 3,
         equilibrium: 3, temperature: 2, viscosity: 2,
         mass: 2, scaleDepth: 2, coherence: 0, halfLife: 1,

@@ -71,6 +71,12 @@ function setEff(key, value) {
     window.S_effective[key] = value;
 }
 
+function setDrivenEff(key, fallback, target, drive) {
+    const baseValue = finite((window.S || {})[key], fallback);
+    const d = clamp(finite(drive, 1), 0, 3);
+    setEff(key, lerp(baseValue, target, d));
+}
+
 function clearKeys() {
     if (!window.S_effective) return;
     for (const key of AUDIO_PILOT_KEYS) {
@@ -85,36 +91,39 @@ function writeAudioPilotedParams(S, blow, tensionRelease, colorPulse) {
     const bass = STATE.bass;
     const mid = STATE.mid;
     const treble = STATE.treble;
+    const particleDrive = clamp(finite(S.audioParticleDrive, 1.0), 0, 3);
+    const motionDrive = particleDrive * clamp(finite(S.audioParticleMotionDrive, 1.0), 0, 3);
+    const colorDrive = particleDrive * clamp(finite(S.audioParticleColorDrive, 1.0), 0, 3);
 
     // Blowout opens the field, punch makes it snap, and the band split keeps
     // the response from collapsing into one soft brightness blob.
-    setEff('resolution', clamp(base('resolution', 0.1) * (1 + blow * 1.08 + punch * 0.62 + treble * 0.42), 0.02, 24));
-    setEff('opacity', clamp(base('opacity', 0.2) * (1 + blow * 0.58 + bass * 0.32) + beat * 0.075 + punch * 0.045, 0.015, 1));
-    setEff('bgGlow', clamp(base('bgGlow', 0.2) + blow * 0.34 + beat * 0.16 + treble * 0.10, 0, 1.35));
-    setEff('bgBlur', clamp(base('bgBlur', 40) + blow * 72 + tensionRelease * 42 + bass * 34 - punch * 20, 0, 280));
-    setEff('trailLen', clamp(base('trailLen', 10) + bass * 8.0 + beat * 4.5 - tensionRelease * 3.0, 1, 30));
+    setDrivenEff('resolution', 0.1, clamp(base('resolution', 0.1) * (1 + blow * 1.08 + punch * 0.62 + treble * 0.42), 0.02, 24), motionDrive);
+    setDrivenEff('opacity', 0.2, clamp(base('opacity', 0.2) * (1 + blow * 0.58 + bass * 0.32) + beat * 0.075 + punch * 0.045, 0.015, 1), particleDrive);
+    setDrivenEff('bgGlow', 0.2, clamp(base('bgGlow', 0.2) + blow * 0.34 + beat * 0.16 + treble * 0.10, 0, 1.35), particleDrive);
+    setDrivenEff('bgBlur', 40, clamp(base('bgBlur', 40) + blow * 72 + tensionRelease * 42 + bass * 34 - punch * 20, 0, 280), particleDrive);
+    setDrivenEff('trailLen', 10, clamp(base('trailLen', 10) + bass * 8.0 + beat * 4.5 - tensionRelease * 3.0, 1, 30), motionDrive);
     {
         const c0 = base('coherence', 40);
         const cSign = c0 < 0 ? -1 : 1;
         const cMag = Math.abs(c0) * (1 - Math.min(0.58, tensionRelease * 0.28 + blow * 0.08 + punch * 0.10)) + mid * 8;
-        setEff('coherence', cSign * clamp(cMag, 3, 260));
+        setDrivenEff('coherence', 40, cSign * clamp(cMag, 3, 260), motionDrive);
     }
-    setEff('scaleDepth', clamp(base('scaleDepth', 1) * (1 - Math.min(0.54, tensionRelease * 0.34 + blow * 0.06)) + punch * 0.24 + bass * 0.18, 0, 8));
+    setDrivenEff('scaleDepth', 1, clamp(base('scaleDepth', 1) * (1 - Math.min(0.54, tensionRelease * 0.34 + blow * 0.06)) + punch * 0.24 + bass * 0.18, 0, 8), motionDrive);
     {
         const turbBase = base('physicsEmergence', 0.0);
         const turbDrive = blow * 0.58 + tensionRelease * 0.24 + punch * 0.72 + treble * 0.38;
         const turbSign = Math.abs(turbBase) > 0.08 ? (turbBase < 0 ? -1 : 1) : STATE.beatPolarity;
-        setEff('physicsEmergence', clamp(turbBase + turbSign * turbDrive, -8.0, 8.0));
+        setDrivenEff('physicsEmergence', 0, clamp(turbBase + turbSign * turbDrive, -8.0, 8.0), motionDrive);
     }
-    setEff('temperature', clamp(base('temperature', 0.5) + blow * 0.24 + treble * 0.32 + punch * 0.18 - tensionRelease * 0.12, 0, 5));
-    setEff('equilibrium', clamp(base('equilibrium', 0.01) * (1 - Math.min(0.42, tensionRelease * 0.25)) + beat * 0.0012 + treble * 0.0024, 0.0001, 0.45));
-    setEff('viscosity', clamp(base('viscosity', 0.15) + tensionRelease * 0.12 - punch * 0.055, 0, 0.98));
-    setEff('tempo', clamp(base('tempo', 1) * (1 + beat * 0.16 + treble * 0.10 - tensionRelease * 0.08), 0.01, 8));
+    setDrivenEff('temperature', 0.5, clamp(base('temperature', 0.5) + blow * 0.24 + treble * 0.32 + punch * 0.18 - tensionRelease * 0.12, 0, 5), motionDrive);
+    setDrivenEff('equilibrium', 0.01, clamp(base('equilibrium', 0.01) * (1 - Math.min(0.42, tensionRelease * 0.25)) + beat * 0.0012 + treble * 0.0024, 0.0001, 0.45), motionDrive);
+    setDrivenEff('viscosity', 0.15, clamp(base('viscosity', 0.15) + tensionRelease * 0.12 - punch * 0.055, 0, 0.98), motionDrive);
+    setDrivenEff('tempo', 1, clamp(base('tempo', 1) * (1 + beat * 0.16 + treble * 0.10 - tensionRelease * 0.08), 0.01, 8), motionDrive);
 
     STATE.hueDrift = (STATE.hueDrift + 0.0011 + STATE.fxBeat * 0.017 + treble * 0.002) % 1;
-    setEff('hue', (base('hue', 0.5) + STATE.hueDrift + colorPulse * 0.18 + treble * 0.08) % 1);
-    setEff('sat', clamp(base('sat', 0.9) + colorPulse * 0.86 + mid * 0.18, 0, 2.35));
-    setEff('lightness', clamp(base('lightness', 0.9) + colorPulse * 0.24 + punch * 0.08 - bass * 0.045, 0.35, 1.45));
+    setDrivenEff('hue', 0.5, (base('hue', 0.5) + STATE.hueDrift + colorPulse * 0.18 + treble * 0.08) % 1, colorDrive);
+    setDrivenEff('sat', 0.9, clamp(base('sat', 0.9) + colorPulse * 0.86 + mid * 0.18, 0, 2.35), colorDrive);
+    setDrivenEff('lightness', 0.9, clamp(base('lightness', 0.9) + colorPulse * 0.24 + punch * 0.08 - bass * 0.045, 0.35, 1.45), colorDrive);
 }
 
 export function updateAudioReactivity() {

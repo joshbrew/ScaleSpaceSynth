@@ -5,7 +5,15 @@ import {
     VISUAL_EFFECT_STYLES
 } from '../render/visual-style-registry.js';
 import { AUDIO_2D_BACKDROP_STYLE_IDS, AUDIO_2D_RANDOM_STYLE_POOL } from '../render/audio-fx-registry.js';
-import { AUDIO_PILOT_KEYS, isAudioPilotEnabled } from '../audio/pilot.js';
+import {
+    AUDIO_PILOT_KEYS,
+    AUDIO_REACTIVE_CONTROL_KEYS,
+    audioPilotStateKey,
+    randomizerPilotStateKey,
+    isAudioPilotEnabled,
+    isRandomizerPilotEnabled,
+    sanitizeAudioWaypointState
+} from '../audio/pilot.js';
 const SAFE_RANDOM_RANGES = {
     tempo:       { min: 0.08,  max: 3.25, step: 0.01, curve: 'linear' },
     resolution:  { min: 0.03,  max: 8.0, step: 0.01, curve: 'log' },
@@ -34,9 +42,20 @@ const SAFE_RANDOM_RANGES = {
     visualEffectExpressivity: { min: 1.10, max: 2.45, step: 0.01, curve: 'linear' },
     visualEffectDynamics: { min: 0.95, max: 2.35, step: 0.01, curve: 'linear' },
     visualEffect2DBackdropMix: { min: 0.75, max: 2.0, step: 0.01, curve: 'linear' },
+    visualEffect2DFade: { min: 0.0, max: 0.18, step: 0.01, curve: 'linear' },
+    visualEffect3DFade: { min: 0.22, max: 0.85, step: 0.01, curve: 'linear' },
 
     audioOscHz:  { min: 45, max: 880, step: 1, curve: 'log' },
     audioFxGain: { min: 0.35, max: 2.8, step: 0.01, curve: 'linear' },
+    audioReactiveAmount: { min: 0.65, max: 2.25, step: 0.01, curve: 'linear' },
+    audioReactiveGain: { min: 3.0, max: 8.5, step: 0.01, curve: 'linear' },
+    audioReactiveAttack: { min: 0.025, max: 0.12, step: 0.001, curve: 'linear' },
+    audioReactiveRelease: { min: 0.006, max: 0.032, step: 0.001, curve: 'linear' },
+    audioReactiveRelaxation: { min: 0.25, max: 1.35, step: 0.01, curve: 'linear' },
+    audioColorBeat: { min: 0.45, max: 2.35, step: 0.01, curve: 'linear' },
+    audioParticleDrive: { min: 0.55, max: 2.25, step: 0.01, curve: 'linear' },
+    audioParticleMotionDrive: { min: 0.35, max: 2.6, step: 0.01, curve: 'linear' },
+    audioParticleColorDrive: { min: 0.25, max: 2.4, step: 0.01, curve: 'linear' },
 };
 
 const HISTORY_KEY = 'ss_randomizer_history';
@@ -47,19 +66,26 @@ const NUMERIC_VISUAL_KEYS = [
     'coherence', 'equilibrium', 'temperature', 'viscosity', 'mass',
     'opacity', 'trailLen', 'hue', 'sat', 'lightness', 'bgGlow', 'bgBlur',
     'visualEffectAmount', 'visualEffectQuality', 'visualEffectEcho', 'visualEffectAberration', 'visualEffectRings', 'visualEffectExpressivity', 'visualEffectDynamics',
-    'visualEffect2DBackdropMix'
+    'visualEffect2DBackdropMix', 'visualEffect2DFade', 'visualEffect3DFade'
 ];
-const NUMERIC_AUDIO_KEYS = ['audioOscHz', 'audioFxGain'];
+const RANDOM_NUMERIC_AUDIO_KEYS = ['audioOscHz', 'audioFxGain'];
+const NUMERIC_AUDIO_KEYS = [...RANDOM_NUMERIC_AUDIO_KEYS, ...AUDIO_REACTIVE_CONTROL_KEYS];
+const AUDIO_PILOT_STATE_KEYS = AUDIO_PILOT_KEYS.map(key => audioPilotStateKey(key));
+const RANDOMIZER_PILOT_STATE_KEYS = AUDIO_PILOT_KEYS.map(key => randomizerPilotStateKey(key));
 const STRING_VISUAL_KEYS = ['compatFlowMode', 'visualEffectStyle', 'visualEffect2DBackdropStyle'];
-const DISCRETE_KEYS = ['shape', 'colorMode', 'showParticles', 'showRibbons', 'tessRibbons', 'visualEffects', 'visualEffectBackdrop', 'visualEffect2DBackdrop', 'visualEffectPost', 'visualEffectCenterSwim', 'visualEffectNoTrailStyles', 'audioLoop', 'audioMuted', 'audioReactive', 'perfProfile'];
+const DISCRETE_KEYS = ['shape', 'colorMode', 'showParticles', 'showRibbons', 'tessRibbons', 'visualEffects', 'visualEffectBackdrop', 'visualEffect2DBackdrop', 'visualEffectPost', 'visualEffectCenterSwim', 'visualEffectNoTrailStyles', 'audioLoop', 'audioMuted', 'audioReactive', 'audioAutoEnableVisuals', 'perfProfile', 'visualEffectRandomize', 'randomizerSourceMode', ...RANDOMIZER_PILOT_STATE_KEYS, ...AUDIO_PILOT_STATE_KEYS];
 const USER_CONTROLLED_FX_LAYER_KEYS = ['visualEffects', 'visualEffectBackdrop', 'visualEffect2DBackdrop', 'visualEffectPost'];
 const USER_CONTROLLED_AUDIO_MENU_KEYS = [
     ...USER_CONTROLLED_FX_LAYER_KEYS,
+    ...RANDOMIZER_PILOT_STATE_KEYS,
+    ...AUDIO_PILOT_STATE_KEYS,
     'audioLoop',
     'audioMuted',
     'audioReactive',
     'audioMonitor',
+    'audioAutoEnableVisuals',
     'visualEffectRandomize',
+    'randomizerSourceMode',
     'audioAutoEnableVisuals'
 ];
 const RANDOMIZER_FX_KEYS = [
@@ -113,7 +139,12 @@ function _currentLayerFlag(key, fallback = true) {
     return window.S && window.S[key] !== undefined ? window.S[key] !== false : !!fallback;
 }
 
+function _isAtlasRandomizerApply(opts = {}) {
+    return opts.source === 'atlas-randomizer' || opts.source === 'continuous-atlas' || opts.applyAtlasWaypointState === true;
+}
+
 function _shouldRespectAudioPilot(opts = {}) {
+    if (_isAtlasRandomizerApply(opts)) return false;
     return opts.respectAudioPilot !== false && (
         opts.continuous === true ||
         opts.source === 'randomizer' ||
@@ -124,26 +155,95 @@ function _shouldRespectAudioPilot(opts = {}) {
 }
 
 function _canPilotKey(key, opts = {}) {
-    return !_shouldRespectAudioPilot(opts) || !AUDIO_PILOT_KEYS.includes(key) || isAudioPilotEnabled(key);
+    return !_shouldRespectAudioPilot(opts) || !AUDIO_PILOT_KEYS.includes(key) || isRandomizerPilotEnabled(key);
 }
 
 function _shouldPreserveAudioMenuState(opts = {}) {
     if (opts.preserveAudioMenuState === false) return false;
+    if (_isAtlasRandomizerApply(opts)) return false;
     return _shouldRespectAudioPilot(opts);
+}
+
+function _clearDisabledAudioPilotEffective() {
+    if (!window.S_effective) return;
+    for (const key of AUDIO_PILOT_KEYS) {
+        if (!isAudioPilotEnabled(key)) delete window.S_effective[key];
+    }
+}
+
+function _continuousAudioPilotMaskSettings() {
+    const out = {};
+    const rebuildMask = _rand() < 0.22;
+    const baseEnabledChance = 0.38 + _rand() * 0.42;
+    let enabledCount = 0;
+
+    for (const key of AUDIO_PILOT_KEYS) {
+        const stateKey = audioPilotStateKey(key);
+        const current = window.S && typeof window.S[stateKey] === 'boolean'
+            ? window.S[stateKey] !== false
+            : true;
+        let next = current;
+
+        if (key === 'showParticles') {
+            next = true;
+        } else if (rebuildMask) {
+            const keyBias = key === 'shape' || key === 'colorMode' ? -0.10 : 0;
+            next = _rand() < Math.max(0.18, Math.min(0.92, baseEnabledChance + keyBias));
+        } else {
+            const flipChance = key === 'shape' || key === 'colorMode' ? 0.20 : 0.13;
+            if (_rand() < flipChance) next = !current;
+        }
+
+        out[stateKey] = !!next;
+        if (out[stateKey]) enabledCount++;
+    }
+
+    const minEnabled = Math.max(5, Math.floor(AUDIO_PILOT_KEYS.length * 0.28));
+    while (enabledCount < minEnabled) {
+        const key = _pick(AUDIO_PILOT_KEYS.filter(k => k !== 'showParticles'));
+        const stateKey = audioPilotStateKey(key);
+        if (out[stateKey] !== true) {
+            out[stateKey] = true;
+            enabledCount++;
+        }
+    }
+
+    return out;
+}
+
+function _randomizerApplyOptions(opts = {}, picked = {}) {
+    if (picked && picked.source === 'atlas') {
+        return {
+            ...opts,
+            source: opts.continuous ? 'continuous-atlas' : 'atlas-randomizer',
+            respectAudioPilot: false,
+            preserveAudioMenuState: false,
+            preserveRandomizerSourceMode: true,
+            applyAtlasWaypointState: true,
+        };
+    }
+    return { ...opts, source: 'randomizer' };
 }
 
 function _respectAudioPilotLocks(settings, opts = {}) {
     if (!settings) return settings;
     const filtered = { ...settings };
+    const liveSourceMode = window.S?.randomizerSourceMode;
+    const randomizePilotMask = opts.randomizeAudioPilotMask === true;
     if (_shouldRespectAudioPilot(opts)) {
         for (const key of AUDIO_PILOT_KEYS) {
-            if (!isAudioPilotEnabled(key)) delete filtered[key];
+            if (!isRandomizerPilotEnabled(key)) delete filtered[key];
         }
     }
     if (_shouldPreserveAudioMenuState(opts)) {
         for (const key of USER_CONTROLLED_AUDIO_MENU_KEYS) {
+            if (randomizePilotMask && AUDIO_PILOT_STATE_KEYS.includes(key)) continue;
             delete filtered[key];
         }
+    }
+    if (opts.preserveRandomizerSourceMode === true) {
+        if (['true-random', 'atlas-codes', 'both'].includes(liveSourceMode)) filtered.randomizerSourceMode = liveSourceMode;
+        else delete filtered.randomizerSourceMode;
     }
     if (_shouldRespectAudioPilot(opts) && window.S?.visualEffectRandomize === false) {
         for (const key of RANDOMIZER_FX_KEYS) {
@@ -199,7 +299,9 @@ function _maybeBoostAccent(settings, key, min, max, chance = 0.5, power = 0.65) 
 
 function _applyLeftWeightedScene(settings, opts = {}) {
     if (!settings || opts.leftWeightedScene === false) return settings;
-    if (settings._leftWeightedScene !== true && _rand() >= 0.50) return settings;
+    const chanceRaw = Number(opts.leftWeightedChance);
+    const chance = Number.isFinite(chanceRaw) ? Math.max(0, Math.min(1, chanceRaw)) : 0.20;
+    if (settings._leftWeightedScene !== true && _rand() >= chance) return settings;
 
     settings._leftWeightedScene = true;
     settings._lowValueScene = true;
@@ -1058,6 +1160,7 @@ function _syncKeys(keys) {
         }
     }
     try { if (window.syncTogglesFromState) window.syncTogglesFromState(); } catch (e) { console.error(e); }
+    try { if (window.syncAudioPilotTogglesFromState) window.syncAudioPilotTogglesFromState(); } catch (e) { console.error(e); }
     try { if (window.refreshRadialUI) window.refreshRadialUI(); } catch (e) { console.error(e); }
 }
 
@@ -1142,6 +1245,8 @@ function _sanitizeSnapshot(raw, { includeAudio = true, includeVisuals = true } =
     }
 
     if (includeAudio) {
+        const audioState = sanitizeAudioWaypointState(raw);
+        if (audioState) Object.assign(out, audioState);
         if (typeof raw?.audioLoop === 'boolean') out.audioLoop = raw.audioLoop;
         if (typeof raw?.audioMuted === 'boolean') out.audioMuted = raw.audioMuted;
         if (typeof raw?.audioReactive === 'boolean') out.audioReactive = raw.audioReactive;
@@ -1219,6 +1324,7 @@ function _applySnapshotImmediate(settings, opts = {}) {
         changed.add(key);
     }
 
+    _clearDisabledAudioPilotEffective();
     _syncKeys([...changed]);
     _applyEngineSideEffects(changed, {
         resize: opts.resize !== false,
@@ -1300,6 +1406,7 @@ function _transitionToSnapshot(settings, opts = {}) {
             for (const [key, value] of Object.entries(filteredClean)) {
                 if (_canPilotKey(key, opts)) window.S[key] = value;
             }
+            _clearDisabledAudioPilotEffective();
             _syncKeys([...changed]);
             _applyEngineSideEffects(changed, { resize: true, reinitialize: opts.reinitialize === true });
             _restartOscIfNeeded(changed);
@@ -1324,9 +1431,9 @@ function _atlasWaypointPool() {
 function _settingsFromWaypoint(wp, { includeAudio = true, includeVisuals = true } = {}) {
     if (!wp || !wp.params) return null;
     const raw = {};
+    const optics = wp.optics && typeof wp.optics === 'object' ? wp.optics : {};
     if (includeVisuals) {
         Object.assign(raw, wp.params || {});
-        const optics = wp.optics && typeof wp.optics === 'object' ? wp.optics : {};
         Object.assign(raw, optics);
         if (typeof optics.showParticles === 'boolean') raw.showParticles = optics.showParticles;
         if (typeof optics.showRibbons === 'boolean') raw.showRibbons = optics.showRibbons;
@@ -1338,7 +1445,9 @@ function _settingsFromWaypoint(wp, { includeAudio = true, includeVisuals = true 
         if (Number.isFinite(Number(raw.coherence)) && Number(raw.coherence) < 0) raw.coherence = 0;
     }
     if (includeAudio) {
-        Object.assign(raw, _generateTrueRandomSettings({ includeAudio: true, includeVisuals: false }));
+        const audioState = sanitizeAudioWaypointState(optics.audio || wp.audio || optics);
+        if (audioState) Object.assign(raw, audioState);
+        else Object.assign(raw, _generateTrueRandomSettings({ includeAudio: true, includeVisuals: false }));
     }
     const clean = _sanitizeSnapshot(raw, { includeAudio, includeVisuals });
     clean._atlasSourceId = wp.id || '';
@@ -1365,8 +1474,8 @@ function _chooseRandomizerSettings(opts = {}) {
     const useAtlas = allowAtlas && (mode === 'atlas-codes' || _rand() < 0.5);
     if (useAtlas) {
         const atlas = _generateAtlasSettings(opts);
-        if (atlas) return { settings: _finishRandomizerSettings(atlas, opts), source: 'atlas', label: atlas._atlasSourceName || 'atlas code' };
-        if (mode === 'atlas-codes') return { settings: _finishRandomizerSettings(_generateTrueRandomSettings(opts), opts), source: 'random-fallback', label: 'random fallback' };
+        if (atlas) return { settings: atlas, source: 'atlas', label: atlas._atlasSourceName || 'atlas code' };
+        if (mode === 'atlas-codes') return { settings: null, source: 'atlas-empty', label: 'no atlas codes' };
     }
     return { settings: _finishRandomizerSettings(_generateTrueRandomSettings(opts), opts), source: 'random', label: 'random' };
 }
@@ -1488,7 +1597,7 @@ function _applyLowValueFlux(settings) {
     return settings;
 }
 
-function _generateTrueRandomSettings({ includeAudio = true, includeVisuals = true, continuous = false, allowDiscrete = false } = {}) {
+function _generateTrueRandomSettings({ includeAudio = true, includeVisuals = true, continuous = false, allowDiscrete = false, randomizeAudioPilotMask = false } = {}) {
     const settings = {};
 
     if (includeVisuals) {
@@ -1552,8 +1661,11 @@ function _generateTrueRandomSettings({ includeAudio = true, includeVisuals = tru
     }
 
     if (includeAudio) {
-        for (const key of NUMERIC_AUDIO_KEYS) settings[key] = _randomValue(key, SAFE_RANDOM_RANGES[key]);
+        for (const key of RANDOM_NUMERIC_AUDIO_KEYS) settings[key] = _randomValue(key, SAFE_RANDOM_RANGES[key]);
         settings.audioLoop = true;
+        if (continuous && randomizeAudioPilotMask) {
+            Object.assign(settings, _continuousAudioPilotMaskSettings());
+        }
     }
 
     return settings;
@@ -1585,6 +1697,7 @@ function _continuousNext() {
         transitionSec: _continuous.transitionSec,
         continuous: true,
         preserveFreeEnergy: true,
+        randomizeAudioPilotMask: true,
     });
     _continuous.pending = Promise.resolve(p)
         .catch(e => console.error(e))
@@ -1631,7 +1744,21 @@ export function randomizeScaleSpaceSettings(opts = {}) {
     if (!window.S) return null;
 
     const picked = _chooseRandomizerSettings(opts);
-    const settings = _respectAudioPilotLocks(picked.settings, { ...opts, source: 'randomizer' });
+    if (!picked || !picked.settings) {
+        const summary = {
+            id: Date.now().toString(36).toUpperCase(),
+            label: picked?.label || 'no atlas codes',
+            randomizerSource: picked?.source || 'atlas-empty',
+            atlasSourceId: '',
+            atlasSourceName: '',
+            skipped: true,
+        };
+        _dispatch('scalespace-randomized', { ...summary, source: picked?.source || 'atlas-empty' });
+        return summary;
+    }
+
+    const applyOpts = _randomizerApplyOptions(opts, picked);
+    const settings = _respectAudioPilotLocks(picked.settings, applyOpts);
     const source = opts.continuous ? (picked.source === 'atlas' ? 'continuous-atlas' : 'continuous') : picked.source;
     const summary = _summarize(settings, picked.label || source);
     summary.randomizerSource = picked.source;
@@ -1642,12 +1769,12 @@ export function randomizeScaleSpaceSettings(opts = {}) {
     _pushHistory(settings, summary);
 
     if (!opts.transitionSec) {
-        _applySnapshotImmediate(settings, opts);
+        _applySnapshotImmediate(settings, applyOpts);
         _dispatch('scalespace-randomized', { ...summary, source });
         return summary;
     }
 
-    return _transitionToSnapshot(settings, opts)
+    return _transitionToSnapshot(settings, applyOpts)
         .then(() => {
             _dispatch('scalespace-randomized', { ...summary, source });
             return summary;
@@ -1701,6 +1828,7 @@ export function setContinuousRandomization(active, opts = {}) {
     _syncKeys(['randomizerContinuous']);
 
     if (!nextActive) {
+        _cancelTransition();
         _continuous.pending = null;
         _dispatch('scalespace-randomizer-continuous', getContinuousRandomizationState());
         return getContinuousRandomizationState();
@@ -1718,6 +1846,7 @@ export function updateContinuousRandomizationTransitionSec(value) {
     _continuous.transitionSec = transitionSec;
     if (window.S) window.S.randomizerTransitionSec = transitionSec;
     _setRandomizerState({ transitionSec });
+    _syncKeys(['randomizerTransitionSec']);
     _dispatch('scalespace-randomizer-continuous', getContinuousRandomizationState());
     return getContinuousRandomizationState();
 }

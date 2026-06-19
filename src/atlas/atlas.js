@@ -3,6 +3,7 @@ import { sanitizeName } from '../core/utils.js';
 import { makeButtonRow, makeSection } from '../ui/dom-ui.js';
 import { PARAM_KEYS, MOD_KEYS, VISIBILITY_XFADE_KEYS, tour, coordHash } from './constants.js';
 import { paintBackgroundLayer, downloadFullResScreenshot } from '../render/capture-render.js';
+import { captureAudioWaypointState, applyAudioWaypointState } from '../audio/pilot.js';
 export { PARAM_KEYS, MODULATABLE_KEYS, MOD_KEYS, VISIBILITY_XFADE_KEYS, TOUR_STOPPING_KEYS, tour, coordHash } from './constants.js';
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -195,6 +196,30 @@ function applyTransitionSideEffects(keys = []) {
     }
 }
 
+function stopContinuousRandomizerForWaypointTravel() {
+    const S = window.S || {};
+    let active = S.randomizerContinuous === true;
+    try {
+        if (!active && typeof window.getContinuousRandomizationState === 'function') {
+            active = window.getContinuousRandomizationState().active === true;
+        }
+    } catch (e) {}
+    if (!active) return;
+    try {
+        if (typeof window.setContinuousRandomization === 'function') {
+            window.setContinuousRandomization(false, { transitionSec: S.randomizerTransitionSec || 6.0 });
+        } else {
+            S.randomizerContinuous = false;
+            if (window.sliderSync && typeof window.sliderSync.randomizerContinuous === 'function') {
+                window.sliderSync.randomizerContinuous(false);
+            }
+            if (window.syncTogglesFromState) window.syncTogglesFromState();
+        }
+    } catch (e) {
+        S.randomizerContinuous = false;
+    }
+}
+
 export function saveWP() {
     try {
         localStorage.setItem('ss_waypoints', JSON.stringify({ waypoints: window.waypoints }));
@@ -290,7 +315,8 @@ export async function captureWaypoint() {
         showRibbons:   !!window.S.showRibbons,
         tessRibbons:   !!window.S.tessRibbons,
         shape:         window.S.shape || 'circle',
-        mods: mods
+        mods: mods,
+        audio: captureAudioWaypointState()
     };
 
     const cid = coordHash(params);
@@ -426,6 +452,7 @@ export function applyWaypointImmediate(wp, options = {}) {
     if (!engine) return;
 
     if (window.tour && window.tour.active && typeof stopTour === 'function') stopTour();
+    stopContinuousRandomizerForWaypointTravel();
     window.transition = null;
     window.S_effective = null;
     delete window.S._xfade;
@@ -451,6 +478,7 @@ export function applyWaypointImmediate(wp, options = {}) {
     if (v.tessRibbons !== undefined) window.S.tessRibbons = !!v.tessRibbons;
     if (v.shape !== undefined) window.S.shape = v.shape;
     if (v.colorMode !== undefined) window.S.colorMode = v.colorMode;
+    if (v.audio) applyAudioWaypointState(v.audio);
 
     if (wp.camDist !== undefined) {
         engine.cam.dist = wp.camDist;
@@ -511,6 +539,7 @@ window.applyWaypointImmediate = applyWaypointImmediate;
 
 export function travelTo(wp) {
     if (!wp) return;
+    stopContinuousRandomizerForWaypointTravel();
     // tour.speed (default 1) divides the dwell/transition time — +/- keys let
     // the user speed up or slow a running tour live. Clamped so it can't hit
     // zero (infinite) or invert.
@@ -550,7 +579,8 @@ export function captureHomepoint() {
             showRibbons:   !!window.S.showRibbons,
             tessRibbons:   !!window.S.tessRibbons,
             shape:         window.S.shape || 'circle',
-            mods: captureModState()
+            mods: captureModState(),
+            audio: captureAudioWaypointState()
         },
         camDist:    engine.cam.dist,
         camQuatArr: engine.cam.quat.toArray(),
@@ -774,6 +804,8 @@ function startTransition(toP, toD, toQArr, toV, toPArr, dur = 5000) {
         shape:         toV.shape         !== undefined ? toV.shape         : fromFlags.shape,
         colorMode:     toV.colorMode     !== undefined ? toV.colorMode     : fromFlags.colorMode
     } : { ...fromFlags };
+
+    if (toV && toV.audio) applyAudioWaypointState(toV.audio);
 
     const fromVisibility = {
         particles: visibilityAlphaForKey('showParticles'),

@@ -13,7 +13,13 @@ import { initRadialUI } from './radial-ui.js';
 import { downloadFullResScreenshot } from '../render/capture-render.js';
 import { formatParamValue } from './toast.js';
 import { initAudioSourceButton } from './audio-source-ui.js';
-import { AUDIO_PILOT_KEYS, audioPilotStateKey, defaultAudioPilotEnabled } from '../audio/pilot.js';
+import {
+    AUDIO_PILOT_KEYS,
+    audioPilotStateKey,
+    randomizerPilotStateKey,
+    defaultAudioPilotEnabled,
+    defaultRandomizerPilotEnabled
+} from '../audio/pilot.js';
 import { addVisualEffectControls } from './audiovisual-controls.js';
 import { setPerformanceProfile } from '../render/performance.js';
 
@@ -1124,23 +1130,60 @@ function makeSlider(p, label, subhead, ll, lr, key, min, max, step, cb) {
     `;
 
     const valSpan = d.querySelector('.val');
-    const pilotKey = audioPilotStateKey(key);
     if (AUDIO_PILOT_KEYS.includes(key)) {
-        if (typeof window.S[pilotKey] !== 'boolean') window.S[pilotKey] = defaultAudioPilotEnabled(key);
+        const randomizerKey = randomizerPilotStateKey(key);
+        const audioKey = audioPilotStateKey(key);
+        if (typeof window.S[randomizerKey] !== 'boolean') {
+            window.S[randomizerKey] = typeof window.S[audioKey] === 'boolean' ? window.S[audioKey] : defaultRandomizerPilotEnabled(key);
+        }
+        if (typeof window.S[audioKey] !== 'boolean') window.S[audioKey] = defaultAudioPilotEnabled(key);
+        d.dataset.pilotRow = '1';
         d.dataset.audioPilotRow = '1';
-        const pilotLabel = document.createElement('label');
-        pilotLabel.className = 'audio-pilot-toggle';
-        pilotLabel.title = 'Let randomizer and audio control this parameter';
-        const pilot = document.createElement('input');
-        pilot.type = 'checkbox';
-        pilot.checked = window.S[pilotKey] !== false;
-        pilot.addEventListener('change', () => {
-            window.S[pilotKey] = !!pilot.checked;
-            if (!pilot.checked && window.S_effective) delete window.S_effective[key];
-            try { localStorage.setItem('ss_state', JSON.stringify(window.S)); } catch (e) {}
-        });
-        pilotLabel.appendChild(pilot);
-        d.insertBefore(pilotLabel, valSpan);
+
+        const makePilotToggle = (kind, stateKey, fallback, title, onDisable) => {
+            const pilotLabel = document.createElement('label');
+            pilotLabel.className = `pilot-toggle ${kind}-pilot-toggle`;
+            pilotLabel.title = title;
+            const pilot = document.createElement('input');
+            pilot.type = 'checkbox';
+            pilot.checked = window.S[stateKey] !== false;
+            const glyph = document.createElement('span');
+            glyph.className = 'pilot-glyph';
+            glyph.textContent = kind === 'randomizer' ? 'R' : 'A';
+            pilot.addEventListener('change', () => {
+                window.S[stateKey] = !!pilot.checked;
+                if (!pilot.checked && typeof onDisable === 'function') onDisable();
+                try { localStorage.setItem('ss_state', JSON.stringify(window.S)); } catch (e) {}
+                if (kind === 'randomizer' && window.syncRandomizerPilotTogglesFromState) window.syncRandomizerPilotTogglesFromState();
+                if (kind === 'audio' && window.syncAudioPilotTogglesFromState) window.syncAudioPilotTogglesFromState();
+            });
+            const registryName = kind === 'randomizer' ? '_randomizerPilotUpdaters' : '_audioPilotUpdaters';
+            window[registryName] = window[registryName] || {};
+            if (!window[registryName][stateKey]) window[registryName][stateKey] = new Set();
+            window[registryName][stateKey].add(() => {
+                if (typeof window.S[stateKey] !== 'boolean') window.S[stateKey] = fallback;
+                pilot.checked = window.S[stateKey] !== false;
+            });
+            pilotLabel.appendChild(pilot);
+            pilotLabel.appendChild(glyph);
+            return pilotLabel;
+        };
+
+        const randomizerToggle = makePilotToggle(
+            'randomizer',
+            randomizerKey,
+            defaultRandomizerPilotEnabled(key),
+            'Let the randomizer control this parameter'
+        );
+        const audioToggle = makePilotToggle(
+            'audio',
+            audioKey,
+            defaultAudioPilotEnabled(key),
+            'Let audio modulate this parameter',
+            () => { if (window.S_effective) delete window.S_effective[key]; }
+        );
+        d.insertBefore(randomizerToggle, valSpan);
+        d.insertBefore(audioToggle, valSpan);
     }
     const inp = d.querySelector('input[type="range"]');
     const syncLocalSlider = (val) => {
@@ -1343,6 +1386,16 @@ function makeSlider(p, label, subhead, ll, lr, key, min, max, step, cb) {
     return d;
 }
 
+function setRandomizerPilotKeys(keys, enabled) {
+    const list = Array.isArray(keys) ? keys : [keys];
+    for (const key of list) {
+        const pilotKey = randomizerPilotStateKey(key);
+        window.S[pilotKey] = !!enabled;
+    }
+    try { localStorage.setItem('ss_state', JSON.stringify(window.S)); } catch (e) {}
+    if (window.syncRandomizerPilotTogglesFromState) window.syncRandomizerPilotTogglesFromState();
+}
+
 function setAudioPilotKeys(keys, enabled) {
     const list = Array.isArray(keys) ? keys : [keys];
     for (const key of list) {
@@ -1351,6 +1404,19 @@ function setAudioPilotKeys(keys, enabled) {
         if (!enabled && window.S_effective) delete window.S_effective[key];
     }
     try { localStorage.setItem('ss_state', JSON.stringify(window.S)); } catch (e) {}
+    if (window.syncAudioPilotTogglesFromState) window.syncAudioPilotTogglesFromState();
+}
+
+function randomizerPilotGroupEnabled(keys) {
+    const list = Array.isArray(keys) ? keys : [keys];
+    return list.every(key => {
+        const pilotKey = randomizerPilotStateKey(key);
+        const audioKey = audioPilotStateKey(key);
+        if (typeof window.S[pilotKey] !== 'boolean') {
+            window.S[pilotKey] = typeof window.S[audioKey] === 'boolean' ? window.S[audioKey] : defaultRandomizerPilotEnabled(key);
+        }
+        return window.S[pilotKey] !== false;
+    });
 }
 
 function audioPilotGroupEnabled(keys) {
@@ -1365,22 +1431,51 @@ function audioPilotGroupEnabled(keys) {
 function makePilotSection(p, labelKey, sub, keys) {
     const section = makeSection(p, labelKey, sub);
     const list = Array.isArray(keys) ? keys : [keys];
-    section.classList.add('audio-pilot-section');
+    section.classList.add('pilot-section', 'audio-pilot-section');
+    section.dataset.pilotRow = '1';
     section.dataset.audioPilotRow = '1';
 
-    const pilotLabel = document.createElement('label');
-    pilotLabel.className = 'audio-pilot-toggle';
-    pilotLabel.title = 'Let randomizer and audio control this optics group';
+    const makeGroupPilot = (kind, title, checkedFn, setter, registryName, keyFn) => {
+        const pilotLabel = document.createElement('label');
+        pilotLabel.className = `pilot-toggle ${kind}-pilot-toggle`;
+        pilotLabel.title = title;
+        const pilot = document.createElement('input');
+        pilot.type = 'checkbox';
+        pilot.checked = checkedFn(list);
+        const glyph = document.createElement('span');
+        glyph.className = 'pilot-glyph';
+        glyph.textContent = kind === 'randomizer' ? 'R' : 'A';
+        pilot.addEventListener('change', () => setter(list, pilot.checked));
+        window[registryName] = window[registryName] || {};
+        const groupUpdater = () => {
+            pilot.checked = checkedFn(list);
+        };
+        for (const key of list) {
+            const pilotKey = keyFn(key);
+            if (!window[registryName][pilotKey]) window[registryName][pilotKey] = new Set();
+            window[registryName][pilotKey].add(groupUpdater);
+        }
+        pilotLabel.appendChild(pilot);
+        pilotLabel.appendChild(glyph);
+        return pilotLabel;
+    };
 
-    const pilot = document.createElement('input');
-    pilot.type = 'checkbox';
-    pilot.checked = audioPilotGroupEnabled(list);
-    pilot.addEventListener('change', () => {
-        setAudioPilotKeys(list, pilot.checked);
-    });
-
-    pilotLabel.appendChild(pilot);
-    section.appendChild(pilotLabel);
+    section.appendChild(makeGroupPilot(
+        'randomizer',
+        'Let randomizer control this optics group',
+        randomizerPilotGroupEnabled,
+        setRandomizerPilotKeys,
+        '_randomizerPilotUpdaters',
+        randomizerPilotStateKey
+    ));
+    section.appendChild(makeGroupPilot(
+        'audio',
+        'Let audio modulate this optics group',
+        audioPilotGroupEnabled,
+        setAudioPilotKeys,
+        '_audioPilotUpdaters',
+        audioPilotStateKey
+    ));
     return section;
 }
 
@@ -1641,6 +1736,22 @@ export function syncTogglesFromState() {
 }
 window.syncTogglesFromState = syncTogglesFromState;
 
+export function syncRandomizerPilotTogglesFromState() {
+    const updaters = window._randomizerPilotUpdaters || {};
+    for (const key in updaters) {
+        updaters[key].forEach(fn => { try { fn(); } catch (e) {} });
+    }
+}
+window.syncRandomizerPilotTogglesFromState = syncRandomizerPilotTogglesFromState;
+
+export function syncAudioPilotTogglesFromState() {
+    const updaters = window._audioPilotUpdaters || {};
+    for (const key in updaters) {
+        updaters[key].forEach(fn => { try { fn(); } catch (e) {} });
+    }
+}
+window.syncAudioPilotTogglesFromState = syncAudioPilotTogglesFromState;
+
 export function makeToggle(p, label, key, color, cb) {
     const d = document.createElement('span');
     d.className = 'tog';
@@ -1751,18 +1862,6 @@ export function buildUI(engine) {
         { label: 'Fixed Count', key: 'perfParticleScaling', matchVal: false, cb: () => { if (window.engine?.applyPerfLimits) window.engine.applyPerfLimits(); } },
         { label: 'Adaptive Count', key: 'perfParticleScaling', matchVal: true, cb: () => { if (window.engine?.applyPerfLimits) window.engine.applyPerfLimits(); } }
     ]);
-    makeSection(pb, 'Randomizer', 'syncs with Audio Menu');
-    makeButtonRow(pb, [
-        { label: 'Continuous Random', key: 'randomizerContinuous', cb: (on) => {
-            const next = !!on;
-            window.S.randomizerContinuous = next;
-            try { localStorage.setItem('ss_state', JSON.stringify(window.S)); } catch (e) {}
-            if (window.setContinuousRandomization) {
-                window.setContinuousRandomization(next, { transitionSec: window.S.randomizerTransitionSec || 6.0 });
-            }
-            if (window.syncTogglesFromState) window.syncTogglesFromState();
-        } }
-    ]);
     makeSlider(pb, c.resolution?.label || 'Resolution', c.resolution?.sub ||'particle size', c.resolution?.ll ||'-rez', c.resolution?.lr ||'+rez', 'resolution', .02, 20, .01);
     makeSlider(pb, c.inversion?.label || 'Inversion', c.inversion?.sub ||'compression', c.inversion?.ll ||'contract', c.inversion?.lr ||'expand', 'inversion', 30, 500, 1);
     makeSlider(pb, c.halfLife?.label || 'Half-Life', c.halfLife?.sub ||'particle lifespan', c.halfLife?.ll ||'mortal', c.halfLife?.lr ||'immortal', 'halfLife', 0, 30, .1);
@@ -1773,6 +1872,67 @@ export function buildUI(engine) {
     makeSlider(pb, c.temperature?.label || 'Temperature', c.temperature?.sub ||'noise intensity', c.temperature?.ll ||'glacial', c.temperature?.lr ||'firey', 'temperature', 0, 3, .01);
     makeSlider(pb, c.viscosity?.label || 'Viscosity', c.viscosity?.sub ||'sluggishness', c.viscosity?.ll ||'fluid', c.viscosity?.lr ||'thick', 'viscosity', 0, 1, .01);
     makeSlider(pb, c.mass?.label || 'Mass', c.mass?.sub ||'inertia', c.mass?.ll ||'light', c.mass?.lr ||'heavy', 'mass', 0.1, 5, .05);
+
+    makeSection(pb, 'Randomizer', 'manual roll / continuous morph');
+    const randomizerFooter = document.createElement('div');
+    randomizerFooter.className = 'button-row params-randomizer-footer';
+    pb.appendChild(randomizerFooter);
+
+    const randomizeNow = document.createElement('div');
+    randomizeNow.className = 'button-row-btn params-randomize-now';
+    randomizeNow.dataset.active = '0';
+    randomizeNow.textContent = 'Randomize';
+    randomizeNow.title = 'Roll one new randomizer target now';
+    randomizeNow.addEventListener('click', async () => {
+        if (randomizeNow.dataset.busy === '1') return;
+        randomizeNow.dataset.busy = '1';
+        try {
+            const summary = window.randomizeScaleSpaceSettings ? await window.randomizeScaleSpaceSettings({
+                includeAudio: true,
+                includeVisuals: true,
+                transitionSec: window.S.randomizerTransitionSec || 6.0,
+                sourceMode: window.S.randomizerSourceMode,
+            }) : null;
+            if (window.showToast) {
+                const label = summary?.skipped ? (summary.label || 'no atlas codes') : (summary?.label || 'randomized');
+                window.showToast(summary?.skipped ? `Randomizer skipped: ${label}` : `Randomized: ${label}`, { color: summary?.skipped ? '#ffb36d' : '#88ffcc' });
+            }
+        } finally {
+            randomizeNow.dataset.busy = '0';
+        }
+    });
+    randomizerFooter.appendChild(randomizeNow);
+
+    const continuousRandom = document.createElement('div');
+    continuousRandom.className = 'button-row-btn params-continuous-random';
+    continuousRandom.textContent = 'Continuous';
+    continuousRandom.title = 'Keep morphing through randomizer targets';
+    const syncContinuousRandom = () => {
+        continuousRandom.dataset.active = window.S.randomizerContinuous ? '1' : '0';
+    };
+    syncContinuousRandom();
+    window._toggleUpdaters = window._toggleUpdaters || {};
+    if (!window._toggleUpdaters.randomizerContinuous) window._toggleUpdaters.randomizerContinuous = new Set();
+    window._toggleUpdaters.randomizerContinuous.add(syncContinuousRandom);
+    continuousRandom.addEventListener('click', () => {
+        const next = !window.S.randomizerContinuous;
+        window.S.randomizerContinuous = next;
+        try { localStorage.setItem('ss_state', JSON.stringify(window.S)); } catch (e) {}
+        if (window.setContinuousRandomization) {
+            window.setContinuousRandomization(next, { transitionSec: window.S.randomizerTransitionSec || 6.0 });
+        }
+        syncContinuousRandom();
+        if (window.syncTogglesFromState) window.syncTogglesFromState();
+    });
+    randomizerFooter.appendChild(continuousRandom);
+
+    makeSlider(pb, 'Transition Seconds', 'continuous random', 'snap', 'morph', 'randomizerTransitionSec', .1, 120, .25, (val) => {
+        const sec = Math.max(0.1, Math.min(120, Number(val) || 6.0));
+        window.S.randomizerTransitionSec = sec;
+        if (window.updateContinuousRandomizationTransitionSec) {
+            window.updateContinuousRandomizationTransitionSec(sec);
+        }
+    });
 
     const rd = document.createElement('div');
     // Generous vertical breathing room — these are footer actions on a
@@ -2032,6 +2192,13 @@ export function buildUI(engine) {
             { label: 'System', key: 'audioSource', matchVal: 'system', cb: () => setAudioSourceFromConfig('system') }
         ]);
         makeSlider(audioPane, 'Audio FX Gain', '', 'soft', 'hot', 'audioFxGain', 0.1, 5, 0.01);
+        makeSlider(audioPane, 'Input Gain', 'analyser sensitivity', 'flat', 'hot', 'audioReactiveGain', 0, 16, 0.01);
+        makeSlider(audioPane, 'Param Drive', 'master audio impact on particle params', 'still', 'violent', 'audioParticleDrive', 0, 3, 0.01);
+        makeSlider(audioPane, 'Motion Drive', 'extra impact on physics/motion params', 'calm', 'wild', 'audioParticleMotionDrive', 0, 3, 0.01);
+        makeSlider(audioPane, 'Color Drive', 'extra impact on color params', 'plain', 'electric', 'audioParticleColorDrive', 0, 3, 0.01);
+        makeSlider(audioPane, 'Envelope Drive', 'audio envelope into param modulation', 'dry', 'wet', 'audioReactiveAmount', 0, 3, 0.01);
+        makeSlider(audioPane, 'Release Smear', 'sustained bass/tension response', 'snappy', 'molasses', 'audioReactiveRelaxation', 0, 2, 0.01);
+        makeSlider(audioPane, 'Beat Color', 'color punch on transients', 'none', 'full', 'audioColorBeat', 0, 3, 0.01);
         makeSlider(audioPane, 'Volume', '', 'quiet', 'loud', 'volume', 0, 1, 0.01, () => {
             if (window.audio && typeof window.audio.updateVolume === 'function') window.audio.updateVolume(window.S.volume);
         });

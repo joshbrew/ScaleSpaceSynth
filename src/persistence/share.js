@@ -1,5 +1,6 @@
 import { PARAM_KEYS, MOD_KEYS, coordHash } from '../atlas/constants.js';
 import { validateWaypoint } from '../core/validation.js';
+import { sanitizeAudioWaypointState } from '../audio/pilot.js';
 import { showToast } from '../ui/toast.js';
 
 // ─── Sharable Coordinate Strings ───────────────────────────────────────────
@@ -12,6 +13,7 @@ import { showToast } from '../ui/toast.js';
 //   p — params (10 sim values that ARE the coordinate)
 //   v — optics (17 visual fields; if shareIncludeOptics)
 //   m — modulations (subset of params being modulated)
+//   x — audio waypoint controls and randomizer-control mask
 //   c — camera
 //   n — name/title (if shareIncludeTitle)
 //   d — notes (if shareIncludeNotes)
@@ -66,6 +68,16 @@ async function _deflate(bytes) {
     for (const c of out) { merged.set(c, off); off += c.length; }
     return merged;
 }
+
+function _parseJsonBytes(bytes) {
+    try {
+        const json = new TextDecoder().decode(bytes);
+        const payload = JSON.parse(json);
+        if (payload && typeof payload === 'object') return payload;
+    } catch (e) {}
+    return null;
+}
+
 async function _inflate(bytes) {
     const cs = new DecompressionStream('deflate-raw');
     const writer = cs.writable.getWriter();
@@ -133,6 +145,8 @@ function _buildSharePayload(wp, opts) {
             if (savedMods[k] !== undefined) m[k] = round(k, savedMods[k]);
         });
         if (Object.keys(m).length > 0) payload.m = m;
+        const audioState = sanitizeAudioWaypointState(wp.optics && wp.optics.audio);
+        if (audioState) payload.x = audioState;
     }
     if (inclName && wp.name) payload.n = wp.name;
     if (inclNotes && wp.notes) payload.d = wp.notes;
@@ -197,24 +211,20 @@ export async function decodeShareString(str) {
         bytes = _b64urlDecode(str.slice(4));
     } catch (e) { return null; }
 
-    // Try DEFLATE first. If it succeeds, parse the inflated bytes as JSON.
-    // If it fails (bytes weren't deflate-compressed — they're legacy raw
-    // JSON), fall back to parsing the original bytes as JSON. Both paths
-    // produce the same payload shape downstream.
+    // Raw JSON SS1 strings are the legacy fallback format. Parse that first
+    // so old atlas/share codes never hit browser DecompressionStream edge cases
+    // on non-compressed bytes. If raw JSON fails, try DEFLATE-compressed JSON.
+    const rawPayload = _parseJsonBytes(bytes);
+    if (rawPayload) return rawPayload;
+
     try {
         if (typeof DecompressionStream !== 'undefined') {
             const inflated = await _inflate(bytes);
-            const json = new TextDecoder().decode(inflated);
-            const payload = JSON.parse(json);
-            if (payload && typeof payload === 'object') return payload;
+            const payload = _parseJsonBytes(inflated);
+            if (payload) return payload;
         }
-    } catch (e) { /* fall through to raw */ }
-
-    try {
-        const json = new TextDecoder().decode(bytes);
-        const payload = JSON.parse(json);
-        if (payload && typeof payload === 'object') return payload;
     } catch (e) { /* fall through to null */ }
+
     return null;
 }
 
@@ -254,7 +264,7 @@ export async function importShareString(str) {
         category: window.S.lastWpCat || 'Waypoints',
         isImported: true,
         params: payload.p,
-        optics: Object.assign({}, payload.v || {}, payload.m ? { mods: payload.m } : {}),
+        optics: Object.assign({}, payload.v || {}, payload.m ? { mods: payload.m } : {}, payload.x ? { audio: payload.x } : {}),
         camDist:    _camD,
         camQuatArr: _camQ,
         camPosArr:  _camP,

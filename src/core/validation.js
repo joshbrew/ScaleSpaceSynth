@@ -2,6 +2,7 @@ import { PARAM_KEYS, MOD_KEYS } from '../atlas/constants.js';
 import { sanitizeName } from './utils.js';
 import { VISUAL_EFFECT_STYLES } from '../render/visual-style-registry.js';
 import { AUDIO_2D_BACKDROP_STYLE_IDS } from '../render/audio-fx-registry.js';
+import { sanitizeAudioWaypointState } from '../audio/pilot.js';
 
 // ─── Input sanitization & validation ───────────────────────────────────────
 // Trust-boundary defenses for save files, share strings, and localStorage.
@@ -64,11 +65,14 @@ export function validateWaypoint(w) {
     const visNumKeys = ['hue', 'sat', 'lightness', 'opacity', 'tempo', 'timeScale', 'trailLen',
                         'bgGlow', 'bgBlur', 'offsetX', 'offsetY', 'offsetZ', 'billboardOffset'];
     visNumKeys.forEach(k => { if (_isFiniteNumber(inV[k])) out.optics[k] = inV[k]; });
-    if (_isFiniteIntInRange(inV.colorMode, 0, 3)) out.optics.colorMode = inV.colorMode;
+    if (_isFiniteIntInRange(inV.colorMode, 0, 4)) out.optics.colorMode = inV.colorMode;
     if (typeof inV.showParticles === 'boolean') out.optics.showParticles = inV.showParticles;
     if (typeof inV.showRibbons === 'boolean')   out.optics.showRibbons   = inV.showRibbons;
     if (typeof inV.tessRibbons === 'boolean')   out.optics.tessRibbons   = inV.tessRibbons;
     if (typeof inV.shape === 'string' && _VALID_SHAPES.has(inV.shape)) out.optics.shape = inV.shape;
+
+    const audioState = sanitizeAudioWaypointState(inV.audio || w.audio || inV);
+    if (audioState) out.optics.audio = audioState;
 
     // Mods — MOD_KEYS allowlist, finite-number values only.
     const inMods = (inV.mods && typeof inV.mods === 'object' && !Array.isArray(inV.mods)) ? inV.mods : null;
@@ -131,6 +135,15 @@ const _STATE_CLAMPS = {
     visualEffect2DFade: [0, 1],
     visualEffect2DResolutionScale: [0.25, 1],
     visualEffect3DFade: [0, 1],
+    audioReactiveAmount: [0, 3],
+    audioReactiveGain: [0, 16],
+    audioReactiveAttack: [0.005, 0.5],
+    audioReactiveRelease: [0.002, 0.25],
+    audioReactiveRelaxation: [0, 2],
+    audioColorBeat: [0, 3],
+    audioParticleDrive: [0, 3],
+    audioParticleMotionDrive: [0, 3],
+    audioParticleColorDrive: [0, 3],
     randomizerChaos: [0, 1],
     coherence: [0, 200],
     zoomNearDistance: [1, 500],
@@ -177,7 +190,7 @@ export function hydrateState(raw) {
         // is 'number' so it'd otherwise flow through the generic number
         // branch and accept e.g. 2.7. Special-case integer-and-range.
         if (k === 'colorMode') {
-            if (_isFiniteIntInRange(Number(v), 0, 3)) window.S[k] = Number(v);
+            if (_isFiniteIntInRange(Number(v), 0, 4)) window.S[k] = Number(v);
             continue;
         }
 
