@@ -28,6 +28,7 @@ const SHARE_PARAM_KEYS = PARAM_KEYS;
 // fields cost almost nothing and recipients get a faithful reproduction.
 const SHARE_VISUAL_KEYS = [
     'opacity', 'tempo', 'trailLen',
+    'backdropAnimationMode', 'trailAnimationMode',
     'showParticles', 'showRibbons', 'tessRibbons',
     'shape', 'colorMode',
     'hue', 'sat', 'lightness',
@@ -133,6 +134,8 @@ function _buildSharePayload(wp, opts) {
     if (wp.camDist !== undefined) payload.c.d = Math.round(wp.camDist);
     if (wp.camPosArr) payload.c.p = wp.camPosArr.map(x => Math.round(x));
     if (wp.camQuatArr) payload.c.q = wp.camQuatArr.map(x => Math.round(x * 10000) / 10000);
+    if (Number.isFinite(Number(wp.camOrbitYaw))) payload.c.oy = Math.round(Number(wp.camOrbitYaw) * 10000) / 10000;
+    if (Number.isFinite(Number(wp.camOrbitPitch))) payload.c.op = Math.round(Number(wp.camOrbitPitch) * 10000) / 10000;
 
     if (inclOptics) {
         payload.v = {};
@@ -248,6 +251,8 @@ export async function importShareString(str) {
     const _camD = payload.c && payload.c.d;
     const _camQ = payload.c && payload.c.q;
     const _camP = payload.c && payload.c.p;
+    const _camOY = payload.c && payload.c.oy;
+    const _camOP = payload.c && payload.c.op;
     // Notes: prefer shared notes, fall back to marker.
     const importedNotes = (typeof payload.d === 'string' && payload.d.length > 0)
         ? payload.d
@@ -265,9 +270,11 @@ export async function importShareString(str) {
         isImported: true,
         params: payload.p,
         optics: Object.assign({}, payload.v || {}, payload.m ? { mods: payload.m } : {}, payload.x ? { audio: payload.x } : {}),
-        camDist:    _camD,
-        camQuatArr: _camQ,
-        camPosArr:  _camP,
+        camDist:       _camD,
+        camQuatArr:    _camQ,
+        camPosArr:     _camP,
+        camOrbitYaw:   _camOY,
+        camOrbitPitch: _camOP,
         timestamp: Date.now(),
         thumbnail: null,
         thumbAspect: 16 / 9,

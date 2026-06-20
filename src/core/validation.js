@@ -13,7 +13,7 @@ import { sanitizeAudioWaypointState } from '../audio/pilot.js';
 //                            per-type coercion. Unknown keys / bad types dropped.
 // Primary XSS defense is at DOM sinks (textContent, DOM construction).
 // These helpers are second-layer.
-const _VALID_SHAPES = new Set(['circle', 'square', 'diamond']);
+const _VALID_SHAPES = new Set(['circle', 'square', 'diamond', 'point']);
 export function _isFiniteNumber(v) { return typeof v === 'number' && Number.isFinite(v); }
 export function _isFiniteIntInRange(v, lo, hi) { return typeof v === 'number' && Number.isInteger(v) && v >= lo && v <= hi; }
 export function _isFiniteNumberArray(v, len) {
@@ -41,6 +41,9 @@ export function validateWaypoint(w) {
         camQuatArr: _isFiniteNumberArray(w.camQuatArr, 4) ? w.camQuatArr.slice(0, 4) : [0, 0, 0, 1]
     };
 
+    if (_isFiniteNumber(w.camOrbitYaw)) out.camOrbitYaw = w.camOrbitYaw;
+    if (_isFiniteNumber(w.camOrbitPitch)) out.camOrbitPitch = w.camOrbitPitch;
+
     // Thumbnail: data URLs only, length-capped to ~2MB (toDataURL output
     // for our thumbnails sits well under this). Reject any other shape
     // — including http: URLs which could exfiltrate referer or trigger
@@ -66,6 +69,15 @@ export function validateWaypoint(w) {
     const visNumKeys = ['hue', 'sat', 'lightness', 'opacity', 'tempo', 'timeScale', 'trailLen',
                         'bgGlow', 'bgBlur', 'offsetX', 'offsetY', 'offsetZ', 'billboardOffset'];
     visNumKeys.forEach(k => { if (_isFiniteNumber(inV[k])) out.optics[k] = inV[k]; });
+    const animModes = new Set(['auto', 'smooth', 'held12', 'held4']);
+    if (typeof inV.backdropAnimationMode === 'string' && animModes.has(inV.backdropAnimationMode)) {
+        out.optics.backdropAnimationMode = inV.backdropAnimationMode === 'held4' ? 'held12' : inV.backdropAnimationMode;
+    }
+    if (typeof inV.trailAnimationMode === 'string' && animModes.has(inV.trailAnimationMode)) out.optics.trailAnimationMode = inV.trailAnimationMode;
+    if (typeof inV.backdropAnimationThrottle === 'boolean') out.optics.backdropAnimationThrottle = inV.backdropAnimationThrottle;
+    if (typeof inV.trailAnimationThrottle === 'boolean') out.optics.trailAnimationThrottle = inV.trailAnimationThrottle;
+    if (_isFiniteNumber(inV.backdropAnimationFps)) out.optics.backdropAnimationFps = Math.max(1, Math.min(60, inV.backdropAnimationFps));
+    if (_isFiniteNumber(inV.trailAnimationFps)) out.optics.trailAnimationFps = Math.max(1, Math.min(60, inV.trailAnimationFps));
     if (_isFiniteIntInRange(inV.colorMode, 0, 4)) out.optics.colorMode = inV.colorMode;
     if (typeof inV.showParticles === 'boolean') out.optics.showParticles = inV.showParticles;
     if (typeof inV.showRibbons === 'boolean')   out.optics.showRibbons   = inV.showRibbons;
@@ -104,18 +116,21 @@ export function validateWaypoint(w) {
 // not in the listed set, so a tampered save with `theme: '<script>...'` just
 // gets the default theme instead.
 const _STATE_ENUMS = {
-    shape:       ['circle', 'square', 'diamond'],
+    shape:       ['circle', 'square', 'diamond', 'point'],
     theme:       ['classic', 'synthesist'],
     buttonShape: ['hex', 'circle'],
     moveMode:    ['orbit', 'fly'],
     tourMode:    ['sequential', 'random'],
     audioSource: ['off', 'file', 'url', 'mic', 'system'],
     perfProfile: ['balanced', 'quality', 'speed', 'potato'],
+    perfParticleDrawMode: ['native', 'points'],
     nativeComputeBackend: ['three-tsl', 'direct-webgpu', 'babylon'],
     visualEffectStyle: VISUAL_EFFECT_STYLES,
     visualEffect2DBackdropStyle: AUDIO_2D_BACKDROP_STYLE_IDS,
     compatFlowMode: ['adaptive', 'plume', 'vortex', 'sheet', 'ribbon', 'cellular', 'helix', 'cymatic', 'burst'],
-    randomizerSourceMode: ['true-random', 'atlas-codes', 'both']
+    randomizerSourceMode: ['true-random', 'atlas-codes', 'both'],
+    backdropAnimationMode: ['auto', 'smooth', 'held12'],
+    trailAnimationMode: ['auto', 'smooth', 'held12', 'held4']
 };
 
 // Numeric clamps for keys where an unbounded value would actually hurt.
@@ -157,6 +172,12 @@ const _STATE_CLAMPS = {
     zoomOverdrawPixelRatioScaleMin: [0.35, 1],
     zoomOverdrawEffectScaleMin: [0.15, 1],
     zoomOverdrawLineScaleMin: [0.02, 1],
+    overdrawParticleScaleMin: [0.30, 1],
+    overdrawOpacityScaleMin: [0.38, 1],
+    zoomTrailMidBandStrength: [0, 1],
+    trailAnimationFps: [1, 60],
+    zoomDisplayParticleChunk: [256, 65536],
+    zoomTrailParticleChunk: [128, 16384],
     particleCloseScaleStrength: [0, 0.95],
     particleCloseScaleNear: [1, 200],
     compatRibbonBudget: [0, 12000],
@@ -171,6 +192,8 @@ const _STATE_CLAMPS = {
     visualEffectMaxFrameMs: [1, 24],
     canvasResolutionScale: [0.4, 1],
     visualEffect2DBackdropMix: [0.05, 2.5],
+    visualEffect2DBackdropMotion: [0, 1],
+    backdropAnimationFps: [1, 60],
     visualEffectBackdropWorkerMs: [8, 140],
     cameraAutoOrbitSpeed: [-5, 5],
     perfParticleScaleMin: [0.25, 1],
@@ -201,10 +224,6 @@ export function hydrateState(raw) {
             const clamp = _STATE_CLAMPS[k];
             window.S[k] = clamp ? Math.max(clamp[0], Math.min(clamp[1], n)) : n;
         } else if (typeof d === 'boolean') {
-            // Do not hydrate compatSpriteMap from old saves. The WebGPU
-            // PointsMaterial texture-map path is the known source of the
-            // recurring missing-uv AttributeNode error.
-            if (k === 'compatSpriteMap') { window.S[k] = false; continue; }
             if (typeof v === 'boolean') window.S[k] = v;
         } else if (typeof d === 'string') {
             const enums = _STATE_ENUMS[k];

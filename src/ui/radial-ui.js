@@ -9,15 +9,6 @@ import { createRadialControlSets } from './radial-controls.js';
 
 export function initRadialUI() {
 
-    console.log(
-        '%c Scale Space Synthesist %c v' + (window.SS_VERSION || '0.1') + ' \n' +
-        '%c r/ScaleSpace: %chttps://reddit.com/r/ScaleSpace\n' +
-        '%c itch.io:      %chttps://setzstone.itch.io/scale-space',
-        'background:#ffaa55;color:#0c0c1f;font-weight:bold;padding:3px 6px;border-radius:2px 0 0 2px;',
-        'background:#2a1f15;color:#ffaa55;padding:3px 6px;border-radius:0 2px 2px 0;',
-        'color:#7a9acc;',  'color:#cce6ff;text-decoration:underline;',
-        'color:#7a9acc;',  'color:#cce6ff;text-decoration:underline;'
-    );
     const { systemControls, environmentControls, configControls } = createRadialControlSets();
 
     const nodeSize = 64;

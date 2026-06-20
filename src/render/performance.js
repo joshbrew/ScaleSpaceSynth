@@ -14,7 +14,7 @@ const DEFAULT_PERF = {
     maxPerCell: 16,
     particleInitWorkers: 0,
     gpuResetParticles: true,
-    preferWorkerRenderer: false,
+    preferWorkerRenderer: true,
     workerCompute: true,
     nativeComputeBackend: 'three-tsl',
     computeBudgetMode: 'native-balanced',

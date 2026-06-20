@@ -1,8 +1,17 @@
-import particleInitWorkerUrl from './particle-init.worker.js';
+import { PARTICLE_INIT_WORKER_SOURCE } from './particle-init.worker-source.js';
 import { hasSAB, allocTyped } from '../core/smartBuffers.js';
 import { WorkerPool } from '../core/WorkerPool.js';
 
 const TAU = Math.PI * 2;
+
+let particleInitWorkerUrl = '';
+
+function getParticleInitWorkerUrl() {
+    if (!particleInitWorkerUrl) {
+        particleInitWorkerUrl = URL.createObjectURL(new Blob([PARTICLE_INIT_WORKER_SOURCE], { type: 'text/javascript' }));
+    }
+    return particleInitWorkerUrl;
+}
 
 function _makeRng(seed) {
     let s = (seed >>> 0) || 0x9e3779b9;
@@ -82,7 +91,7 @@ function createSingleParticleWorker() {
     const pending = new Map();
 
     const spawn = () => {
-        const w = new Worker(particleInitWorkerUrl);
+        const w = new Worker(getParticleInitWorkerUrl());
         w.onmessage = (e) => {
             const m = e && e.data;
             if (!m || !pending.has(m.id)) return;
@@ -154,7 +163,7 @@ export function createParticleInitWorker() {
                 const desiredSize = Math.max(1, opts.workerCount | 0 || _workerCount(count));
                 if (!pool || poolSize !== desiredSize) {
                     if (pool) await pool.terminate();
-                    pool = new WorkerPool(particleInitWorkerUrl, desiredSize);
+                    pool = new WorkerPool(getParticleInitWorkerUrl(), desiredSize);
                     poolSize = desiredSize;
                 }
 

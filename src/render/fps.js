@@ -19,52 +19,94 @@ export function fpsToEntropy(fps) {
     return Math.round(((60 - fps) / 59) * 100);
 }
 
-export function updateFpsMonitor() {
-    const now = performance.now();
+function currentFpsSample(now) {
+    const worker = window.SS_WORKER_FPS;
+    if (worker && Number.isFinite(Number(worker.fps)) && now - (Number(worker.receivedAt) || 0) < 1800) {
+        const fps = Math.max(0.1, Math.min(240, Number(worker.fps)));
+        const entropy = Number.isFinite(Number(worker.entropy))
+            ? Math.max(0, Math.min(100, Math.round(Number(worker.entropy))))
+            : fpsToEntropy(fps);
+        return {
+            fps,
+            entropy,
+            dt: Number(worker.dt) || 0,
+            frameMs: Number(worker.frameMs) || 0,
+            source: 'worker'
+        };
+    }
+
     const dt = now - _fpsLastTime;
     _fpsLastTime = now;
-    // Skip only true gaps (tab-switch / alt-tab). A genuinely slow frame must
-    // be allowed through — that's exactly the GPU-choke signal we want to
-    // surface. Cap the instantaneous reading at a 1fps floor so a single
-    // monster frame can't drive entropy past the bottom of the scale.
-    if (dt <= 0) return;
-    if (dt > 2000) return; // tab was backgrounded; ignore
+    if (dt <= 0) return null;
+    if (dt > 2000) return null;
     const instant = 1000 / Math.min(dt, 1000);
-    // Lighter EMA than before (was 0.92/0.08) so real dips actually register
-    // instead of being averaged into invisibility. Asymmetric: react fast to
-    // slowdowns (the thing the user feels), recover gently.
     const k = instant < _fpsSmoothed ? 0.35 : 0.12;
     _fpsSmoothed = _fpsSmoothed * (1 - k) + instant * k;
-    _entropySmoothed = fpsToEntropy(_fpsSmoothed);
+    return {
+        fps: _fpsSmoothed,
+        entropy: fpsToEntropy(_fpsSmoothed),
+        dt,
+        frameMs: dt,
+        source: 'main'
+    };
+}
+
+function fpsTier(fps) {
+    if      (fps >= 46) return 'normal';
+    else if (fps >= 31) return 'warming';
+    else if (fps >= 21) return 'heating';
+    else if (fps >= 11) return 'hot';
+    return 'overload';
+}
+
+function updateFpsCounter(fps, entropy, tier, frameMs) {
+    const enabled = window.S?.showFpsCounter === true;
+    let el = document.getElementById('fps-counter');
+    if (!enabled) {
+        if (el) el.remove();
+        return;
+    }
+    if (!el) {
+        el = document.createElement('div');
+        el.id = 'fps-counter';
+        el.setAttribute('aria-live', 'off');
+        document.body.appendChild(el);
+    }
+    el.dataset.tier = tier;
+    const ms = Number.isFinite(Number(frameMs)) && Number(frameMs) > 0 ? `${Number(frameMs).toFixed(1)}ms` : '--ms';
+    el.textContent = `FPS ${Math.round(fps)} · E ${entropy} · ${ms}`;
+}
+
+export function updateFpsMonitor() {
+    const now = performance.now();
+    const sample = currentFpsSample(now);
+    if (!sample) return;
+
+    _fpsSmoothed = sample.fps;
+    _entropySmoothed = sample.entropy;
     const fps = Math.round(_fpsSmoothed);
+    const tier = fpsTier(fps);
     window.SS_FPS = {
         fps: _fpsSmoothed,
         fpsRounded: fps,
         entropy: _entropySmoothed,
-        dt,
+        dt: sample.dt,
+        frameMs: sample.frameMs,
+        source: sample.source,
+        tier,
         updatedAt: now
     };
+
     if (now - _fpsLastDomUpdate < 250) return;
     _fpsLastDomUpdate = now;
-    
-    let tier;
-    // 5 entropy bands — FPS ranges match the Causmonaut / toast-data paradigm:
-    //   Normal 46-60 · Warming 31-45 · Heating 21-30 · Hot 11-20 · Overload 0-10
-    if      (fps >= 46) tier = 'normal';
-    else if (fps >= 31) tier = 'warming';
-    else if (fps >= 21) tier = 'heating';
-    else if (fps >= 11) tier = 'hot';
-    else                tier = 'overload';
-    window.SS_FPS.tier = tier;
 
-    // Update the dock button readout (the entropy number)
     const btnReadout = document.getElementById('dock-fps');
     if (btnReadout) {
         btnReadout.textContent = _entropySmoothed.toString();
+        btnReadout.title = `FPS ${fps} · entropy ${_entropySmoothed} · ${sample.source}`;
         if (btnReadout.dataset.tier !== tier) btnReadout.dataset.tier = tier;
     }
-    
-    // Update the entropy panel (if open)
+
     const panelFps = document.getElementById('entropy-panel-fps');
     if (panelFps) panelFps.textContent = fps.toString();
     const panelEntropy = document.getElementById('entropy-panel-value');
@@ -72,14 +114,19 @@ export function updateFpsMonitor() {
         panelEntropy.textContent = _entropySmoothed.toString();
         panelEntropy.dataset.tier = tier;
     }
+    const panelMs = document.getElementById('entropy-panel-ms');
+    if (panelMs) panelMs.textContent = Number(sample.frameMs) > 0 ? Number(sample.frameMs).toFixed(1) : '--';
+    const panelSource = document.getElementById('entropy-panel-source');
+    if (panelSource) panelSource.textContent = sample.source;
     const panelGauge = document.getElementById('entropy-panel-gauge-fill');
     if (panelGauge) {
-        // SVG circle: stroke-dasharray controls the visible arc. Circumference of r=42 circle = 2πr ≈ 263.89
         const C = 263.89;
         panelGauge.style.strokeDasharray = `${(_entropySmoothed / 100) * C} ${C}`;
         panelGauge.dataset.tier = tier;
     }
+    updateFpsCounter(fps, _entropySmoothed, tier, sample.frameMs);
 }
+window.updateFpsMonitor = updateFpsMonitor;
 
 // ─── Show / hide entropy panel ────────────────────────────────────────────
 // Lazily constructed on first open. Uses the standard .panel / .panel-head /
@@ -123,6 +170,14 @@ export function toggleEntropyPanel() {
                 <div class="entropy-panel-fps-row">
                     <span class="entropy-panel-fps-label">fps</span>
                     <span class="entropy-panel-fps" id="entropy-panel-fps">60</span>
+                </div>
+                <div class="entropy-panel-fps-row">
+                    <span class="entropy-panel-fps-label">ms</span>
+                    <span class="entropy-panel-fps" id="entropy-panel-ms">--</span>
+                </div>
+                <div class="entropy-panel-fps-row">
+                    <span class="entropy-panel-fps-label">src</span>
+                    <span class="entropy-panel-fps" id="entropy-panel-source">main</span>
                 </div>
             </div>
         `;

@@ -33,8 +33,8 @@ const WORKER_STATE = {
   rotationMode: 0
 };
 
-const CLASSIC_SCENES = ['pasteldawn', 'pastelseaglass', 'pasteltwilight', 'pastelrosegold', 'nebulawash', 'bokehbloom', 'chromafog', 'dreamblobs', 'softwaves', 'gradientflow', 'contourveil', 'prismadrift', 'jazzhaze', 'opalbloom', 'ambientglow', 'silkflow', 'spectralmist', 'colorbursts', 'sinefield', 'cymatics', 'rings', 'oscilloscope', 'vectorscope', 'moire', 'starfield', 'matrixrain', 'nebulawash', 'bokehbloom', 'softwaves', 'gradientflow', 'contourveil', 'aurora', 'cellfield', 'honeycomb', 'spectrum', 'matrixcrawl', 'trails'];
-const CLASSIC_ACCENTS = ['radialbars', 'oscilloscope', 'vectorscope', 'spectrum', 'cymatics', 'matrixrain', 'cellular', 'starfield', 'trails'];
+const CLASSIC_SCENES = ['pasteldawn', 'pastelseaglass', 'pasteltwilight', 'pastelrosegold', 'nebulawash', 'bokehbloom', 'chromafog', 'dreamblobs', 'softwaves', 'gradientflow', 'contourveil', 'prismadrift', 'jazzhaze', 'opalbloom', 'ambientglow', 'silkflow', 'spectralmist', 'colorbursts', 'sinefield', 'cymatics', 'rings', 'oscilloscope', 'vectorscope', 'moire', 'starfield', 'nebulawash', 'bokehbloom', 'softwaves', 'gradientflow', 'contourveil', 'aurora', 'spectrum', 'trails'];
+const CLASSIC_ACCENTS = ['radialbars', 'oscilloscope', 'vectorscope', 'spectrum', 'cymatics', 'starfield', 'trails'];
 const TRANSITION_WAVE_SCENES = new Set(['sinefield', 'softwaves', 'gradientflow', 'contourveil', 'dreamblobs', 'nebulawash', 'bokehbloom', 'chromafog', 'prismadrift', 'jazzhaze', 'opalbloom', 'ambientglow', 'silkflow', 'spectralmist', 'colorbursts', 'cymatics', 'rings', 'oscilloscope', 'vectorscope', 'starfield', 'trails']);
 
 function rotatePoint(x, y, a) {
@@ -186,6 +186,10 @@ function hash01(v) {
   return ((Math.sin(v * 12.9898 + 78.233) * 43758.5453) % 1 + 1) % 1;
 }
 
+function ribbonSpanX(u, span = 1.44) {
+  return -span + clamp(u, 0, 1) * span * 2.0;
+}
+
 function stableStyleFamily(style) {
   return resolveBackdropStyleFamily(style || 'classic');
 }
@@ -210,6 +214,11 @@ function isRibbonIdentityStyle(style) {
   return s === 'ribbons' || s === 'trails' || s === 'lightfield' || s === 'sinefield' || s === 'softwaves' || s === 'gradientflow' || s === 'contourveil' || s === 'silkflow' || s === 'prismadrift' || s === 'jazzhaze' || s === 'oscilloscope';
 }
 
+function isLineOnlyBackdropStyle(style) {
+  const s = stableStyleFamily(style);
+  return s === 'vectorscope' || s === 'oscilloscope';
+}
+
 function isSoftIdentityStyle(style) {
   const s = stableStyleFamily(style);
   return s === 'dreamblobs' || s === 'nebulawash' || s === 'bokehbloom' || s === 'chromafog' || s === 'ambientglow' || s === 'spectralmist' || s === 'opalbloom';
@@ -229,7 +238,7 @@ function sameBackdropStyleFamily(a, b) {
 }
 
 function wantsFrostedGlassPass(style) {
-  return !!stableStyleFamily(style);
+  return false;
 }
 
 function preservesFillPrimitiveGeometry(style) {
@@ -504,14 +513,16 @@ function avg(bands, a, b) {
 function makeWriter(maxSegments, hue, sat, light) {
   const positions = new Float32Array(maxSegments * 4); // ax,ay,bx,by per segment in normalized screen space
   const colors = new Float32Array(maxSegments * 6);    // rgb A + rgb B per segment
-  const maxTriangles = Math.max(192, Math.min(7200, Math.floor(maxSegments * 0.52)));
+  const maxTriangles = Math.max(512, Math.min(12000, Math.floor(maxSegments * 1.08)));
   const fillPositions = new Float32Array(maxTriangles * 6); // ax,ay,bx,by,cx,cy per triangle
   const fillColors = new Float32Array(maxTriangles * 9);    // rgb A/B/C per triangle
   let seg = 0;
   let tri = 0;
+  const canWriteSegments = (n = 1) => seg + Math.max(1, n | 0) <= maxSegments;
+  const canWriteTris = (n = 1) => tri + Math.max(1, n | 0) <= maxTriangles;
   const write = (ax, ay, bx, by, h0 = hue, h1 = h0, l0 = light, l1 = l0, sat0 = sat, sat1 = sat0) => {
-    if (seg >= maxSegments) return;
-    if (![ax, ay, bx, by].every(Number.isFinite)) return;
+    if (seg >= maxSegments) return false;
+    if (![ax, ay, bx, by].every(Number.isFinite)) return false;
     const pi = seg * 4;
     positions[pi + 0] = clamp(ax, -3.0, 3.0);
     positions[pi + 1] = clamp(ay, -3.0, 3.0);
@@ -523,10 +534,11 @@ function makeWriter(maxSegments, hue, sat, light) {
     colors[ci + 0] = ca[0]; colors[ci + 1] = ca[1]; colors[ci + 2] = ca[2];
     colors[ci + 3] = cb[0]; colors[ci + 4] = cb[1]; colors[ci + 5] = cb[2];
     seg++;
+    return true;
   };
   const writeTri = (ax, ay, bx, by, cx, cy, h0 = hue, h1 = h0, h2 = h1, l0 = light, l1 = l0, l2 = l1, sat0 = sat, sat1 = sat0, sat2 = sat1) => {
-    if (tri >= maxTriangles) return;
-    if (![ax, ay, bx, by, cx, cy].every(Number.isFinite)) return;
+    if (tri >= maxTriangles) return false;
+    if (![ax, ay, bx, by, cx, cy].every(Number.isFinite)) return false;
     const pi = tri * 6;
     fillPositions[pi + 0] = clamp(ax, -3.0, 3.0);
     fillPositions[pi + 1] = clamp(ay, -3.0, 3.0);
@@ -542,10 +554,15 @@ function makeWriter(maxSegments, hue, sat, light) {
     fillColors[ci + 3] = cb[0]; fillColors[ci + 4] = cb[1]; fillColors[ci + 5] = cb[2];
     fillColors[ci + 6] = cc[0]; fillColors[ci + 7] = cc[1]; fillColors[ci + 8] = cc[2];
     tri++;
+    return true;
   };
   return { positions, colors, fillPositions, fillColors,
     get segments() { return seg; }, get triangles() { return tri; },
     get full() { return seg >= maxSegments; }, get fillFull() { return tri >= maxTriangles; },
+    get segmentRemaining() { return Math.max(0, maxSegments - seg); },
+    get fillRemaining() { return Math.max(0, maxTriangles - tri); },
+    canWriteSegments,
+    canWriteTris,
     write, writeTri };
 }
 
@@ -555,15 +572,16 @@ function drawSineField(wr, bands, feat, d, opts) {
   const steps = Math.floor(clamp(58 + amount * 36, 36, 112));
   const rms = clamp(feat.rms || 0, 0, 1);
   for (let l = 0; l < lines && !wr.full; l++) {
+    if (wr.canWriteSegments && !wr.canWriteSegments(steps)) break;
     const k = l / Math.max(1, lines - 1);
     const y0 = -0.88 + k * 1.76 + Math.sin(k * TAU + t * 0.33 + hue * 4) * (0.018 + d.equilibrium * 0.035);
     const band = bands[(l * 3) % bands.length] || rms;
     const amp = (0.026 + amount * 0.026 + d.scaleDepth * 0.010) * (0.35 + band * 2.1 + feat.beat * 0.78);
-    let px = -1.12;
+    let px = ribbonSpanX(0, 1.46);
     let py = y0;
     for (let s = 1; s <= steps && !wr.full; s++) {
       const u = s / steps;
-      const x = -1.12 + u * 2.24;
+      const x = ribbonSpanX(u, 1.46);
       const wave = Math.sin(u * TAU * (1.2 + (l % 7) * 0.40 + d.coherence * 0.55) + t * (0.7 + d.tempo * 0.45) + k * 8)
         + 0.42 * Math.sin(u * TAU * (2.55 + d.temperature) - t * 0.78 + hue * 7)
         + 0.18 * Math.sin(u * TAU * (5.1 + k * 2) + t * 0.13);
@@ -582,6 +600,8 @@ function drawLightFieldBackdrop(wr, bands, feat, d, opts) {
   const beams = Math.floor(clamp(7 + amount * 8 + d.scaleDepth * 2.6, 6, 18));
   const steps = Math.floor(clamp(96 + amount * 84, 68, 210));
   for (let b = 0; b < beams && !wr.fillFull; b++) {
+    if (wr.canWriteTris && !wr.canWriteTris(steps * 2)) break;
+    if (wr.canWriteSegments && !wr.canWriteSegments(steps)) break;
     const k = b / Math.max(1, beams - 1);
     const seed = hash01(b * 15.73 + 0.42);
     const band = bands[(b * 5 + 2) % Math.max(1, bands.length)] || rms;
@@ -593,7 +613,7 @@ function drawLightFieldBackdrop(wr, bands, feat, d, opts) {
     let prevTop = null, prevBot = null, prevCore = null, prevHue = hue, prevTopLight = light * 0.10, prevBotLight = light * 0.04;
     for (let i = 0; i <= steps && !wr.fillFull; i++) {
       const u = i / steps;
-      const x0 = -1.22 + u * 2.44;
+      const x0 = ribbonSpanX(u, 1.56);
       const bandU = bands[(i * 2 + b * 7) % Math.max(1, bands.length)] || band;
       const lens = Math.sin(u * Math.PI);
       const carrier = Math.sin(u * TAU * (0.62 + d.coherence * 0.22 + seed * 0.22) + t * (0.18 + d.tempo * 0.045) + seed * 7.0)
@@ -632,6 +652,7 @@ function drawLightFieldBackdrop(wr, bands, feat, d, opts) {
   const caustics = Math.floor(clamp(5 + amount * 8 + beat * 5, 5, 20));
   const steps2 = Math.floor(clamp(46 + amount * 34, 36, 108));
   for (let c = 0; c < caustics && !wr.full; c++) {
+    if (wr.canWriteSegments && !wr.canWriteSegments(steps2)) break;
     const seed = hash01(c * 29.31 + 9.4);
     const band = bands[(c * 11 + 4) % Math.max(1, bands.length)] || rms;
     const cx = -0.95 + hash01(seed * 17.0) * 1.90;
@@ -662,6 +683,7 @@ function drawOscilloscope(wr, bands, feat, d, opts) {
   const steps = Math.floor(clamp(160 + amount * 80, 96, 260));
   const rms = clamp(feat.rms || 0, 0, 1);
   for (let g = 0; g < ghosts && !wr.full; g++) {
+    if (wr.canWriteSegments && !wr.canWriteSegments(steps)) break;
     const k = g / Math.max(1, ghosts - 1);
     let px = -1.08;
     let py = (k - 0.5) * 0.42;
@@ -683,6 +705,7 @@ function drawCymatics(wr, bands, feat, d, opts) {
   const rings = Math.floor(clamp(5 + amount * 9 + d.scaleDepth * 4, 4, 22));
   const steps = Math.floor(clamp(110 + amount * 76, 72, 220));
   for (let r = 0; r < rings && !wr.full; r++) {
+    if (wr.canWriteSegments && !wr.canWriteSegments(steps)) break;
     const rk = (r + 1) / rings;
     const base = 0.055 + rk * (0.74 + d.inversion * 0.04);
     let px = 0, py = 0;
@@ -733,6 +756,7 @@ function drawSpectrum(wr, bands, feat, d, opts) {
 function drawVectorscope(wr, bands, feat, d, opts) {
   const { amount, t, hue, light } = opts;
   const n = Math.floor(clamp(180 + amount * 220, 96, 460));
+  if (wr.canWriteSegments && !wr.canWriteSegments(n)) return;
   let px = 0, py = 0;
   for (let i = 0; i <= n && !wr.full; i++) {
     const u = i / n;
@@ -752,13 +776,14 @@ function drawRainbowRibbons(wr, bands, feat, d, opts) {
   const ribbons = Math.floor(clamp(3 + amount * 5, 2, 10));
   const steps = Math.floor(clamp(72 + amount * 44, 48, 140));
   for (let r = 0; r < ribbons && !wr.full; r++) {
+    if (wr.canWriteSegments && !wr.canWriteSegments(steps)) break;
     const k = r / Math.max(1, ribbons - 1);
-    let px = -1.12;
+    let px = ribbonSpanX(0, 1.46);
     let py = Math.sin(k * TAU + t * 0.18) * 0.28 + (k - 0.5) * 0.55;
     for (let s = 1; s <= steps && !wr.full; s++) {
       const u = s / steps;
       const b = bands[(s + r * 6) % bands.length] || 0;
-      const x = -1.12 + u * 2.24;
+      const x = ribbonSpanX(u, 1.46);
       const y = Math.sin(u * Math.PI * (2.0 + r * 0.75 + d.scaleDepth) + t * (0.75 + d.equilibrium * 2.0) + r) * (0.18 + amount * 0.055 + b * 0.20)
         + Math.cos(u * Math.PI * (5.5 + d.temperature * 2.0) - t * 0.72) * 0.055
         + (k - 0.5) * 0.66;
@@ -773,14 +798,15 @@ function drawAurora(wr, bands, feat, d, opts) {
   const curtains = Math.floor(clamp(6 + amount * 9, 4, 18));
   const steps = Math.floor(clamp(56 + amount * 54, 36, 130));
   for (let c = 0; c < curtains && !wr.full; c++) {
+    if (wr.canWriteSegments && !wr.canWriteSegments(Math.ceil(steps * 1.36))) break;
     const k = c / Math.max(1, curtains - 1);
     const yBase = -0.72 + k * 1.44;
-    let prevTop = [-1.12, yBase];
-    let prevBot = [-1.12, yBase - 0.11 - k * 0.03];
+    let prevTop = [ribbonSpanX(0, 1.46), yBase];
+    let prevBot = [ribbonSpanX(0, 1.46), yBase - 0.11 - k * 0.03];
     for (let i = 1; i <= steps && !wr.full; i++) {
       const u = i / steps;
       const b = bands[(i + c * 5) % bands.length] || 0;
-      const x = -1.12 + u * 2.24;
+      const x = ribbonSpanX(u, 1.46);
       const wave = Math.sin(u * 7 + t * (0.18 + k * 0.05) + c) * (0.055 + b * 0.10) * amount
         + Math.sin(u * 19 - t * 0.11) * 0.018;
       const topY = yBase + wave;
@@ -915,12 +941,13 @@ function drawFilledWaveSheet(wr, bands, feat, d, opts) {
   const layers = Math.floor(clamp(2 + amount * 1.8 + feat.beat * 1.0, 2, 5));
   const steps = Math.floor(clamp(96 + amount * 84, 64, 196));
   for (let layer = 0; layer < layers && !wr.fillFull; layer++) {
+    if (wr.canWriteTris && !wr.canWriteTris(steps * 2)) break;
     const lk = layer / Math.max(1, layers - 1);
     const yMid = -0.55 + lk * 1.10 + Math.sin(t * 0.11 + layer) * 0.045;
     let prevTop = null, prevBot = null, prevHue = hue, prevTopLight = light * 0.22, prevBotLight = light * 0.08, prevSatTop = opts.sat, prevSatBot = opts.sat;
     for (let i = 0; i <= steps && !wr.fillFull; i++) {
       const u = i / steps;
-      const x = -1.14 + u * 2.28;
+      const x = ribbonSpanX(u, 1.48);
       const b = bands[(i * 2 + layer * 5) % bands.length] || 0;
       const wave = Math.sin(u * TAU * (1.15 + layer * 0.35 + d.scaleDepth * 0.20) + t * (0.46 + d.tempo * 0.08) + layer)
         + Math.sin(u * TAU * (3.1 + d.temperature * 0.8) - t * 0.36 + b * 2.0) * 0.42;
@@ -963,13 +990,14 @@ function drawSoftColorWaves(wr, bands, feat, d, opts) {
   const layers = Math.floor(clamp(2 + amount * 2.0, 2, 5));
   const steps = Math.floor(clamp(72 + amount * 68, 48, 156));
   for (let layer = 0; layer < layers && !wr.fillFull; layer++) {
+    if (wr.canWriteTris && !wr.canWriteTris(steps * 2)) break;
     const lk = layer / Math.max(1, layers - 1);
     const yBase = -0.72 + lk * 1.44 + Math.sin(t * 0.07 + layer * 0.8) * 0.045;
     let prevTop = null, prevBot = null, prevHue = hue, prevTopLight = light * 0.20, prevBotLight = light * 0.06;
     for (let i = 0; i <= steps && !wr.fillFull; i++) {
       const u = i / steps;
       const b = bands[(i * 3 + layer * 9) % bandsLen] || 0;
-      const x = -1.18 + u * 2.36;
+      const x = ribbonSpanX(u, 1.52);
       const flow = Math.sin(u * TAU * (1.0 + layer * 0.22) + t * (0.18 + d.tempo * 0.035) + b * 1.7)
         + Math.sin(u * TAU * (2.7 + d.temperature * 0.45) - t * 0.16 + layer) * 0.34;
       const span = (0.060 + b * 0.125 + feat.beat * 0.040) * (0.58 + amount * 0.14);
@@ -1027,6 +1055,7 @@ function drawFilledRadialBlob(wr, bands, feat, d, opts) {
   const rings = Math.floor(clamp(2 + amount * 2.0 + feat.beat * 2.0, 2, 6));
   const steps = Math.floor(clamp(42 + amount * 44, 28, 112));
   for (let r = 0; r < rings && !wr.fillFull; r++) {
+    if (wr.canWriteTris && !wr.canWriteTris(steps * 2)) break;
     const rk0 = r / rings;
     const rk1 = (r + 1) / rings;
     for (let i = 0; i < steps && !wr.fillFull; i++) {
@@ -1051,11 +1080,11 @@ function drawFilledRadialBlob(wr, bands, feat, d, opts) {
 function drawFilledAuroraCurtains(wr, bands, feat, d, opts) {
   const { amount, t, hue, light } = opts;
   const cols = Math.floor(clamp(24 + amount * 38, 14, 92));
-  const width = 2.24 / cols;
+  const width = (1.46 * 2.0) / cols;
   for (let i = 0; i < cols && !wr.fillFull; i++) {
     const u = i / Math.max(1, cols - 1);
     const b = bands[(i * 3) % bands.length] || 0;
-    const x0 = -1.12 + i * width;
+    const x0 = ribbonSpanX(i / cols, 1.46);
     const x1 = x0 + width * (0.65 + b * 0.24);
     const top = -0.82 + Math.sin(u * 8 + t * 0.17 + b * 2.0) * 0.16;
     const len = (0.42 + amount * 0.18 + b * 0.55 + feat.beat * 0.18) * (0.8 + Math.sin(u * TAU + t * 0.07) * 0.15);
@@ -1139,7 +1168,10 @@ function writeWarpedGlassQuad(wr, ax, ay, bx, by, cx, cy, dx, dy, h, light, sat,
 
 function writeSoftHaloBlob(wr, cx, cy, rx, ry, h, light, sat, drift = 0.0) {
   const layers = 8;
-  for (let layer = 0; layer < layers && !wr.fillFull; layer++) {
+  let needed = 0;
+  for (let layer = 0; layer < layers; layer++) needed += 34 + layer * 5;
+  if (!wr || !wr.canWriteTris || !wr.canWriteTris(needed)) return false;
+  for (let layer = 0; layer < layers; layer++) {
     const lk = layer / Math.max(1, layers - 1);
     const feather = 1.48 - lk * 0.16;
     const radX = rx * feather;
@@ -1147,7 +1179,7 @@ function writeSoftHaloBlob(wr, cx, cy, rx, ry, h, light, sat, drift = 0.0) {
     const sides = 34 + layer * 5;
     const centerLight = light * (0.008 + (1 - lk) * 0.006);
     const edgeLight = light * (0.040 + (1 - lk) * 0.016);
-    for (let i = 0; i < sides && !wr.fillFull; i++) {
+    for (let i = 0; i < sides; i++) {
       const u0 = i / sides;
       const u1 = (i + 1) / sides;
       const a0 = u0 * TAU;
@@ -1170,6 +1202,7 @@ function writeSoftHaloBlob(wr, cx, cy, rx, ry, h, light, sat, drift = 0.0) {
         softSat(sat, 1.42));
     }
   }
+  return true;
 }
 
 function writeFrostedPane(wr, cx, cy, hw, hh, shearX, h, light, sat) {
@@ -1474,7 +1507,9 @@ function enforceOrientedBackdropGradients(style, positions, colors, fillPosition
 }
 
 
-function applyBackdropMotionFlow(wr, style, t, amount = 1) {
+function applyBackdropMotionFlow(wr, style, t, amount = 1, motion = 0) {
+  const motionStrength = clamp(Number(motion) || 0, 0, 1);
+  if (motionStrength <= 0.001) return;
   const s = resolveBackdropStyleFamily(style || 'classic');
   const matrixMode = s === 'matrixrain' || s === 'matrixcrawl';
   const gridMode = s === 'cellular' || s === 'cellfield' || s === 'honeycomb' || s === 'moire' || s === 'lattice';
@@ -1483,7 +1518,7 @@ function applyBackdropMotionFlow(wr, style, t, amount = 1) {
   const radialMode = isRadialIdentityStyle(s);
   const amp = matrixMode ? 0.0075 : gridMode ? 0.0085 : ribbonMode ? 0.0100 : softMode ? 0.0030 : radialMode ? 0.0 : 0.0080;
   const rate = matrixMode ? 0.30 : gridMode ? 0.22 : ribbonMode ? 0.23 : softMode ? 0.12 : radialMode ? 0.0 : 0.21;
-  const strength = clamp(amount, 0.25, 2.0);
+  const strength = clamp(amount, 0.25, 2.0) * motionStrength;
 
   if (softMode || radialMode) return;
 
@@ -1535,6 +1570,10 @@ function applyBackdropMotionFlow(wr, style, t, amount = 1) {
 function featherBackdropFillEdges(fillPositions, fillColors, triangleCount) {
   const count = Math.max(0, triangleCount | 0);
   if (!count || !fillPositions || !fillColors) {
+    return { fillPositions, fillColors, triangles: count };
+  }
+  const FEATHER_TRIANGLE_BUDGET = 15000;
+  if (count * 3 > FEATHER_TRIANGLE_BUDGET) {
     return { fillPositions, fillColors, triangles: count };
   }
   const outCount = count * 3;
@@ -1653,8 +1692,8 @@ function applyFrostedGlassPass(wr, bands, feat, d, opts, style) {
 
 function drawFilledMatrixBlocks(wr, bands, feat, d, opts) {
   const { amount, t, hue, light } = opts;
-  const cols = Math.floor(clamp(14 + amount * 22, 10, 48));
-  const rows = Math.floor(clamp(9 + amount * 13, 7, 30));
+  const cols = Math.floor(clamp(18 + amount * 24, 14, 56));
+  const rows = Math.floor(clamp(11 + amount * 14, 9, 34));
   const dx = 2.18 / cols;
   const dy = 1.72 / rows;
   const beat = clamp(feat.beat || 0, 0, 1);
@@ -1671,8 +1710,8 @@ function drawFilledMatrixBlocks(wr, bands, feat, d, opts) {
       if (y < -1.10 || y > 1.08) continue;
       const drip = Math.sin(t * 0.18 + j * 0.38 + seed * 9.0) * dy * 0.035;
       const x = -1.09 + c * dx + laneWobble;
-      const w = dx * (0.20 + hash01(c * 9.1 + j) * 0.26 + band * 0.16);
-      const h = dy * (0.34 + hash01(c * 5.3 + j * 2.1) * 0.36 + fade * 0.18);
+      const w = dx * (0.14 + hash01(c * 9.1 + j) * 0.16 + band * 0.10);
+      const h = dy * (0.22 + hash01(c * 5.3 + j * 2.1) * 0.18 + fade * 0.10);
       const hueJ = hue + 0.26 + seed * 0.15 + band * 0.12 + j * 0.008;
       const live = smoothstep(0.02, 0.95, fade + band * 0.28 + beat * 0.10);
       writeQuad(wr, x, y + drip, x + w, y + h + drip, hueJ, light * (0.15 + fade * 0.42 + band * 0.13) * live, opts.sat * (0.82 + fade * 0.36), 0.52 + fade * 0.56);
@@ -1789,6 +1828,7 @@ function drawSacredGeometry(wr, bands, feat, d, opts) {
     if (first && prev && !wr.full) wr.write(prev[0], prev[1], first[0], first[1], hue + ci * 0.04, hue + ci * 0.04 + 0.08, light * 0.38, light * 0.48);
   }
   // soft filled flower core
+  if (wr.canWriteTris && !wr.canWriteTris(Math.max(0, centers.length - 2))) return;
   for (let i = 1; i < centers.length - 1 && !wr.fillFull; i++) {
     const a = i / Math.max(1, centers.length - 1);
     const b = bands[(i * 7) % bands.length] || 0;
@@ -1798,7 +1838,6 @@ function drawSacredGeometry(wr, bands, feat, d, opts) {
 
 function drawMatrixScreenCrawl(wr, bands, feat, d, opts) {
   drawFilledMatrixBlocks(wr, bands, feat, d, { ...opts, amount: opts.amount * 1.20, light: opts.light * 0.92, hue: opts.hue + 0.18 });
-  drawFilledGridPulse(wr, bands, feat, d, { ...opts, amount: opts.amount * 0.55, light: opts.light * 0.58, hue: opts.hue + 0.43 });
   const cols = Math.floor(clamp(22 + opts.amount * 36, 16, 82));
   const rows = Math.floor(clamp(8 + opts.amount * 12, 6, 30));
   const dx = 2.18 / cols;
@@ -1833,8 +1872,8 @@ function blanketSurfaceDisplace(x, y, t, d, amount = 1, mode = 'cell') {
 
 function drawCellularBackdrop(wr, bands, feat, d, opts) {
   const { amount, t, hue, light } = opts;
-  const cols = Math.floor(clamp(6 + amount * 6, 5, 16));
-  const rows = Math.floor(clamp(5 + amount * 4, 4, 12));
+  const cols = Math.floor(clamp(7 + amount * 7, 6, 18));
+  const rows = Math.floor(clamp(6 + amount * 5, 5, 14));
   const dx = 2.08 / cols;
   const dy = 1.60 / rows;
   const beat = clamp(feat.beat || 0, 0, 1);
@@ -1850,8 +1889,8 @@ function drawCellularBackdrop(wr, bands, feat, d, opts) {
       if (seed < 0.07 && gate < 0.20) continue;
       const cx = -1.04 + x * dx + dx * 0.5;
       const cy = -0.80 + y * dy + dy * 0.5;
-      const sx = dx * (0.30 + 0.06 * seed + 0.06 * b + 0.016 * beat);
-      const sy = dy * (0.28 + 0.05 * hash01(seed * 14.1) + 0.055 * b);
+      const sx = dx * (0.22 + 0.04 * seed + 0.04 * b + 0.010 * beat);
+      const sy = dy * (0.20 + 0.04 * hash01(seed * 14.1) + 0.040 * b);
       const breath = 1 + Math.sin(t * 0.13 + u * 2.4 + v * 1.8 + b) * (0.018 + b * 0.018);
       const ax = cx - sx * breath;
       const ay = cy - sy * breath;
@@ -1884,8 +1923,8 @@ function drawCellularBackdrop(wr, bands, feat, d, opts) {
 
 function drawCellFieldAltBackdrop(wr, bands, feat, d, opts) {
   const { amount, t, hue, light } = opts;
-  const cols = Math.floor(clamp(6 + amount * 6, 5, 15));
-  const rows = Math.floor(clamp(6 + amount * 5, 5, 13));
+  const cols = Math.floor(clamp(7 + amount * 7, 6, 18));
+  const rows = Math.floor(clamp(7 + amount * 6, 6, 16));
   const stepX = 2.10 / cols;
   const stepY = 1.68 / rows;
   const beat = clamp(feat.beat || 0, 0, 1);
@@ -1902,8 +1941,8 @@ function drawCellFieldAltBackdrop(wr, bands, feat, d, opts) {
       const stagger = (y & 1) ? 0.22 : -0.08;
       const cx = -1.05 + (x + 0.5 + stagger) * stepX;
       const cy = -0.84 + (y + 0.5) * stepY;
-      const rx = stepX * (0.26 + 0.06 * seed + 0.06 * b + beat * 0.028);
-      const ry = stepY * (0.26 + 0.05 * hash01(seed * 15.1) + 0.05 * b + beat * 0.018);
+      const rx = stepX * (0.20 + 0.04 * seed + 0.04 * b + beat * 0.018);
+      const ry = stepY * (0.20 + 0.04 * hash01(seed * 15.1) + 0.04 * b + beat * 0.012);
       const lean = Math.sin(phase) * stepX * (0.045 + b * 0.018);
       const shear = Math.cos(phase * 0.84 + seed * 4.2) * stepY * (0.06 + b * 0.020);
       const taper = 0.88 + hash01(seed * 11.7) * 0.08;
@@ -2063,13 +2102,14 @@ function drawWaveInterferenceField(wr, bands, feat, d, opts) {
     const ca = Math.cos(angle);
     const sa = Math.sin(angle);
     for (let l = 0; l < waves && !wr.full; l++) {
+      if (wr.canWriteSegments && !wr.canWriteSegments(steps)) break;
       const k = l / Math.max(1, waves - 1);
       const band = bands[(l * 5 + pass * 3) % bands.length] || 0;
       const y0 = -0.92 + k * 1.84 + Math.sin(t * 0.06 + k * TAU) * 0.025;
-      let px = -1.12, py = y0;
+      let px = ribbonSpanX(0, 1.46), py = y0;
       for (let i = 1; i <= steps && !wr.full; i++) {
         const u = i / steps;
-        const x0 = -1.12 + u * 2.24;
+        const x0 = ribbonSpanX(u, 1.46);
         const carrier = Math.sin(u * TAU * (1.5 + l * 0.34 + d.coherence * 0.40) + t * (0.38 + d.tempo * 0.11) + pass * 1.8)
           + Math.sin(u * TAU * (3.2 + d.scaleDepth * 0.65) - t * 0.30 + k * 5.0) * 0.46
           + Math.sin((u + k) * TAU * (5.2 + d.temperature * 1.2) + t * 0.18 + band * 3.0) * 0.22;
@@ -2155,6 +2195,8 @@ function drawContourVeils(wr, bands, feat, d, opts) {
   const veils = Math.floor(clamp(3 + amount * 2.0, 3, 7));
   const steps = Math.floor(clamp(38 + amount * 36, 28, 88));
   for (let v = 0; v < veils && !wr.fillFull; v++) {
+    if (wr.canWriteTris && !wr.canWriteTris(steps * 2)) break;
+    if (wr.canWriteSegments && !wr.canWriteSegments(Math.ceil(steps / 9))) break;
     const vk = v / Math.max(1, veils - 1);
     const arc = 0.55 + vk * 0.75;
     const offset = -0.65 + vk * 1.30 + Math.sin(t * 0.036 + v * 0.83) * 0.10;
@@ -2196,6 +2238,8 @@ function drawGradientFlow(wr, bands, feat, d, opts) {
   const packets = Math.floor(clamp(2 + amount * 2.0, 2, 6));
   const steps = Math.floor(clamp(40 + amount * 42, 30, 100));
   for (let packet = 0; packet < packets && !wr.fillFull; packet++) {
+    if (wr.canWriteTris && !wr.canWriteTris(steps * 2)) break;
+    if (wr.canWriteSegments && !wr.canWriteSegments(Math.ceil(steps / 8))) break;
     const pk = packet / Math.max(1, packets - 1);
     const seed = hash01(packet * 13.17 + 0.2);
     const axis = seed * TAU;
@@ -2205,7 +2249,7 @@ function drawGradientFlow(wr, bands, feat, d, opts) {
     for (let i = 0; i <= steps && !wr.fillFull; i++) {
       const u = i / steps;
       const band = bands[(i * 4 + packet * 9) % Math.max(1, bands.length)] || 0;
-      const xBase = -1.18 + u * 2.36;
+      const xBase = ribbonSpanX(u, 1.52);
       const wave1 = Math.sin(u * TAU * (0.55 + pk * 0.45) + t * 0.050 + packet * 0.8);
       const wave2 = Math.sin(u * TAU * (1.35 + d.temperature * 0.22) - t * 0.032 + seed * 4.0) * 0.52;
       const sway = Math.cos(u * TAU * 0.48 + t * 0.022 + packet) * 0.16;
@@ -2240,6 +2284,7 @@ function drawPrismaDrift(wr, bands, feat, d, opts) {
   const ribbons = Math.floor(clamp(3 + amount * 2.0, 3, 7));
   const steps = Math.floor(clamp(40 + amount * 46, 28, 110));
   for (let r = 0; r < ribbons && !wr.fillFull; r++) {
+    if (wr.canWriteTris && !wr.canWriteTris(steps * 2)) break;
     const rk = r / Math.max(1, ribbons - 1);
     const lane = -0.82 + rk * 1.64;
     let prevA = null, prevB = null;
@@ -2247,7 +2292,7 @@ function drawPrismaDrift(wr, bands, feat, d, opts) {
     for (let i = 0; i <= steps && !wr.fillFull; i++) {
       const u = i / steps;
       const band = bands[(i * 3 + r * 11) % Math.max(1, bands.length)] || 0;
-      const x = -1.14 + u * 2.28;
+      const x = ribbonSpanX(u, 1.48);
       const drift = Math.sin(u * TAU * (0.65 + rk * 0.35) + t * 0.022 + r * 0.8) * (0.12 + band * 0.05);
       const y = lane + drift + Math.cos(u * TAU * (1.6 + d.temperature * 0.10) - t * 0.018 + r) * (0.05 + band * 0.025);
       const width = 0.034 + amount * 0.012 + band * 0.028;
@@ -2281,6 +2326,7 @@ function drawOpalBloom(wr, bands, feat, d, opts) {
       const lk = layer / layers;
       const rad = (0.16 + amount * 0.06 + seed * 0.14) * (1.0 - lk * 0.26) * (1.0 + feat.beat * 0.08);
       const steps = 18 + layer * 4;
+      if (wr.canWriteTris && !wr.canWriteTris(steps)) break;
       for (let s = 0; s < steps && !wr.fillFull; s++) {
         const u0 = s / steps;
         const u1 = (s + 1) / steps;
@@ -2320,7 +2366,8 @@ function drawJazzHaze(wr, bands, feat, d, opts) {
         const h1 = softHue(hue, seed * 6.0 + u * 1.8 + 0.3, band, 0.052);
         wr.write(px, py, x, y, h0, h1, light * 0.045, light * (0.11 + band * 0.05), softSat(opts.sat, 0.34), softSat(opts.sat, 0.46));
       }
-      px, py = x, y
+      px = x;
+      py = y;
     }
   }
 }
@@ -2343,9 +2390,10 @@ function drawDiffuseClouds(wr, bands, feat, d, opts) {
       const oy = Math.sin(a * 1.13) * orbit * 0.78;
       const layers = 3 + (lobe % 3);
       for (let layer = 0; layer < layers && !wr.fillFull; layer++) {
+        const sides = 18 + layer * 4;
+        if (wr.canWriteTris && !wr.canWriteTris(sides)) break;
         const depth = layer / layers;
         const rad = (0.18 + amount * 0.08 + seed * 0.18 + band * 0.10) * (1.0 - depth * 0.18);
-        const sides = 18 + layer * 4;
         const baseH = softHue(hue, seed * 4.0 + lk * 1.8 + depth * 0.7, band, 0.018 + depth * 0.012);
         for (let i = 0; i < sides && !wr.fillFull; i++) {
           const u0 = i / sides;
@@ -2385,6 +2433,7 @@ function drawBokehDrift(wr, bands, feat, d, opts) {
     const cy = Math.sin(a * (0.82 + seed * 0.28)) * (0.10 + seed * 0.62);
     const baseRad = 0.12 + seed * 0.22 + band * 0.08 + amount * 0.04;
     const layers = 4;
+    if (wr.canWriteTris && !wr.canWriteTris(layers * 24)) break;
     for (let layer = 0; layer < layers && !wr.fillFull; layer++) {
       const depth = layer / Math.max(1, layers - 1);
       const rad = baseRad * (1.18 - depth * 0.24);
@@ -2420,6 +2469,7 @@ function drawAmbientGlow(wr, bands, feat, d, opts) {
   const blobs = Math.floor(clamp(3 + amount * 3.5 + (feat.beat || 0) * 2, 3, 12));
   const sides = Math.floor(clamp(18 + amount * 12, 14, 42));
   for (let j = 0; j < blobs && !wr.fillFull; j++) {
+    if (wr.canWriteTris && !wr.canWriteTris(sides)) break;
     const seed = hash01(j * 17.37 + Math.floor(t * 0.08) * 0.31);
     const band = bands[(j * 9 + 5) % Math.max(1, bands.length)] || 0;
     const drift = t * (0.018 + seed * 0.010);
@@ -2452,15 +2502,17 @@ function drawAmbientGlow(wr, bands, feat, d, opts) {
 
 
 function drawSoftHalo(wr, cx, cy, rx, ry, hue, light, sat, seed, rings = 4, sides = 30) {
-  if (!wr || wr.fillFull) return;
+  if (!wr || wr.fillFull) return false;
+  const needed = Math.max(0, Math.floor(sides) * (1 + Math.max(0, Math.floor(rings) - 1) * 2));
+  if (wr.canWriteTris && !wr.canWriteTris(needed)) return false;
   const centerH = softHue(hue, seed * 1.7, 0.35, 0.06);
   const centerL = light * (0.10 + hash01(seed * 31.1) * 0.05);
-  for (let r = 0; r < rings && !wr.fillFull; r++) {
+  for (let r = 0; r < rings; r++) {
     const inner = r / rings;
     const outer = (r + 1) / rings;
     const li = light * (0.14 * Math.pow(1 - inner, 1.55) + 0.010);
     const lo = light * (0.09 * Math.pow(1 - outer, 1.90) + 0.004);
-    for (let i = 0; i < sides && !wr.fillFull; i++) {
+    for (let i = 0; i < sides; i++) {
       const u0 = i / sides;
       const u1 = (i + 1) / sides;
       const a0 = u0 * TAU;
@@ -2479,10 +2531,11 @@ function drawSoftHalo(wr, cx, cy, rx, ry, hue, light, sat, seed, rings = 4, side
         const hi0 = softHue(hue, seed * 3.0 + u0 * 2.2, 0.35, 0.01);
         const hi1 = softHue(hue, seed * 3.0 + u1 * 2.2, 0.35, 0.06);
         wr.writeTri(q0[0], q0[1], p0[0], p0[1], p1[0], p1[1], hi0, h0, h1, li, lo, lo * 0.92, softSat(sat, 1.00), softSat(sat, 1.24), softSat(sat, 1.16));
-        if (!wr.fillFull) wr.writeTri(q0[0], q0[1], p1[0], p1[1], q1[0], q1[1], hi0, h1, hi1, li, lo * 0.92, li * 0.88, softSat(sat, 1.00), softSat(sat, 1.16), softSat(sat, 0.94));
+        wr.writeTri(q0[0], q0[1], p1[0], p1[1], q1[0], q1[1], hi0, h1, hi1, li, lo * 0.92, li * 0.88, softSat(sat, 1.00), softSat(sat, 1.16), softSat(sat, 0.94));
       }
     }
   }
+  return true;
 }
 
 function drawNebulaWash(wr, bands, feat, d, opts) {
@@ -2708,6 +2761,7 @@ function drawClassicSceneTransition(wr, bands, feat, d, opts) {
 
 function drawFilledAccentsForStyle(style, wr, bands, feat, d, opts) {
   const s = String(style || 'classic');
+  if (isLineOnlyBackdropStyle(s)) return;
   const pastelLike = /^pastel/.test(s) || !!PASTEL_STYLE_DEFS[s];
   if (pastelLike) {
     drawNebulaWash(wr, bands, feat, d, { ...opts, amount: opts.amount * 0.48, hue: opts.hue + 0.04, light: opts.light * 0.48 });
@@ -2740,7 +2794,6 @@ function drawFilledAccentsForStyle(style, wr, bands, feat, d, opts) {
     const lateMix = clamp(Number(opts.lateMix ?? layerMix), 0, 1);
     drawMoireGrid(wr, bands, feat, d, { ...opts, amount: opts.amount * (1.04 + layerMix * 0.18), light: opts.light * 0.92 }, false);
     drawWaveInterferenceField(wr, bands, feat, d, { ...opts, amount: opts.amount * (0.24 + layerMix * 0.18), hue: opts.hue + 0.12, light: opts.light * 0.60 });
-    if ((feat.beat || 0) > 0.38 && lateMix > 0.18) drawFilledGridPulse(wr, bands, feat, d, { ...opts, amount: opts.amount * 0.10 * lateMix, hue: opts.hue + 0.20, light: opts.light * 0.30 });
   } else if (s === 'cellular') {
     const layerMix = clamp(Number(opts.layerMix ?? 1), 0, 1);
     const lateMix = clamp(Number(opts.lateMix ?? layerMix), 0, 1);
@@ -2753,17 +2806,14 @@ function drawFilledAccentsForStyle(style, wr, bands, feat, d, opts) {
     const lateMix = clamp(Number(opts.lateMix ?? layerMix), 0, 1);
     drawCellFieldAltBackdrop(wr, bands, feat, d, { ...opts, amount: opts.amount * (0.98 + layerMix * 0.26), hue: opts.hue + 0.06, light: opts.light * 0.88 });
     drawWaveInterferenceField(wr, bands, feat, d, { ...opts, amount: opts.amount * (0.08 + layerMix * 0.08), hue: opts.hue + 0.14, light: opts.light * 0.22 });
-    if ((feat.beat || 0) > 0.24 && lateMix > 0.10) drawFilledGridPulse(wr, bands, feat, d, { ...opts, amount: opts.amount * 0.12 * lateMix, hue: opts.hue + 0.14, light: opts.light * 0.28 });
     if ((feat.beat || 0) > 0.34 && lateMix > 0.18) drawCenterRadiance(wr, bands, feat, d, { ...opts, amount: opts.amount * 0.14 * lateMix, hue: opts.hue + 0.28, light: opts.light * 0.40 });
   } else if (s === 'entropy') {
     const layerMix = clamp(Number(opts.layerMix ?? 1), 0, 1);
     const lateMix = clamp(Number(opts.lateMix ?? layerMix), 0, 1);
     drawEntropyCalculatorBackdrop(wr, bands, feat, d, { ...opts, amount: opts.amount * (0.96 + layerMix * 0.18), light: opts.light * 0.88 });
     drawFilledWaveSheet(wr, bands, feat, d, { ...opts, amount: opts.amount * (0.12 + layerMix * 0.10), hue: opts.hue + 0.10, light: opts.light * 0.22 });
-    if ((feat.beat || 0) > 0.30 && lateMix > 0.14) drawFilledGridPulse(wr, bands, feat, d, { ...opts, amount: opts.amount * 0.10 * lateMix, hue: opts.hue + 0.16, light: opts.light * 0.24 });
   } else if (s === 'spectrum') {
     drawFilledSpectrumBars(wr, bands, feat, d, { ...opts, amount: opts.amount * 0.96, light: opts.light * 0.94 });
-    if ((feat.beat || 0) > 0.28 || WORKER_STATE.pulse > 0.14) drawFilledGridPulse(wr, bands, feat, d, { ...opts, amount: opts.amount * 0.38, hue: opts.hue + 0.44, light: opts.light * 0.64 });
   } else if (s === 'chromafog') {
     const layerMix = clamp(Number(opts.layerMix ?? 1), 0, 1);
     const lateMix = clamp(Number(opts.lateMix ?? layerMix), 0, 1);
@@ -2875,7 +2925,7 @@ function drawByStyle(style, wr, bands, feat, d, opts) {
   else if (baseStyle === 'opalbloom') { drawOpalBloom(wr, bands, feat, d, { ...opts, amount: opts.amount * 1.00, hue: opts.hue + 0.04, light: opts.light * 0.82 }); drawAmbientGlow(wr, bands, feat, d, { ...opts, amount: opts.amount * 0.28, hue: opts.hue + 0.10, light: opts.light * 0.30 }); }
   else if (baseStyle === 'oscilloscope') { drawOscilloscope(wr, bands, feat, d, opts); drawWaveInterferenceField(wr, bands, feat, d, { ...opts, amount: opts.amount * 0.18, hue: opts.hue + 0.14, light: opts.light * 0.55 }); }
   else if (baseStyle === 'spectrum') drawSpectrum(wr, bands, feat, d, opts);
-  else if (baseStyle === 'vectorscope') { drawVectorscope(wr, bands, feat, d, opts); drawCenterRadiance(wr, bands, feat, d, { ...opts, amount: opts.amount * 0.14, hue: opts.hue + 0.10, light: opts.light * 0.38 }); }
+  else if (baseStyle === 'vectorscope') { drawVectorscope(wr, bands, feat, d, opts); }
   else if (baseStyle === 'radialbars' || style === 'radial') drawRadialBars(wr, bands, feat, d, opts);
   else if (baseStyle === 'matrixrain') { drawMatrix(wr, bands, feat, d, opts); drawStarShower(wr, bands, feat, d, { ...opts, amount: opts.amount * 0.26, hue: opts.hue + 0.18, light: opts.light * 0.52 }); }
   else if (baseStyle === 'matrixcrawl') { drawMatrix(wr, bands, feat, d, opts); drawMatrixScreenCrawl(wr, bands, feat, d, { ...opts, amount: opts.amount * 0.72, light: opts.light * 0.75 }); }
@@ -2964,7 +3014,8 @@ function render(msg) {
     hue: (((finite(msg.hue, 0.55) % 1) + 1) % 1),
     sat: clamp(msg.sat, 0.1, 2.2),
     light: clamp(msg.light, 0.15, 0.98),
-    aspect: clamp(msg.aspect || 1, 0.35, 3.5)
+    aspect: clamp(msg.aspect || 1, 0.35, 3.5),
+    backdropMotion: clamp(Number(msg.backdropMotion) || 0, 0, 1)
   };
   const wr = makeWriter(maxSegments, opts.hue, opts.sat, opts.light);
   const peak = detectBeatPeak(clamp(feat.beat || 0, 0, 1), opts.t);
@@ -2996,11 +3047,14 @@ function render(msg) {
   const showcaseMix = styleShowcaseMix(opts.t, 2.2, 5.6);
   const layerMix = clamp(0.35 + showcaseMix * 0.65, 0, 1);
   const lateMix = clamp((showcaseMix - 0.28) / 0.72, 0, 1);
-  if (previousStyle && previousStyle !== style && styleK < 0.92) {
+  const lineOnlyTarget = isLineOnlyBackdropStyle(style);
+  if (!lineOnlyTarget && previousStyle && previousStyle !== style && styleK < 0.92) {
     const previousAccentGain = sensitiveStyle && !sameFamily ? (0.05 + showcaseMix * 0.05) : (0.12 + showcaseMix * 0.13);
     drawFilledAccentsForStyle(previousStyle, wr, bands, feat, d, { ...opts, amount: opts.amount * (1 - styleK) * previousAccentGain, light: opts.light * (sensitiveStyle && !sameFamily ? 0.28 : 0.38), layerMix, lateMix });
   }
-  drawFilledAccentsForStyle(fillStyle, wr, bands, feat, d, { ...opts, amount: opts.amount * (0.46 + showcaseMix * 0.24 + WORKER_STATE.pulse * 0.18), light: opts.light * 0.72, layerMix, lateMix });
+  if (!lineOnlyTarget) {
+    drawFilledAccentsForStyle(fillStyle, wr, bands, feat, d, { ...opts, amount: opts.amount * (0.46 + showcaseMix * 0.24 + WORKER_STATE.pulse * 0.18), light: opts.light * 0.72, layerMix, lateMix });
+  }
 
   const softScaleStyles = new Set(['cymatics', 'rings', 'vectorscope', 'starfield', 'matrixrain', 'matrixcrawl']);
   if (softScaleStyles.has(style) && WORKER_STATE.pulse > 0.08) {
@@ -3015,7 +3069,7 @@ function render(msg) {
     transformWriter(wr, backdropRotation, 0.985, 0, 0);
   }
 
-  applyBackdropMotionFlow(wr, fillStyle || style, opts.t, clamp(opts.amount, 0.25, 2.0));
+  applyBackdropMotionFlow(wr, fillStyle || style, opts.t, clamp(opts.amount, 0.25, 2.0), opts.backdropMotion);
   if (wantsFrostedGlassPass(fillStyle || style)) {
     applyFrostedGlassPass(wr, bands, feat, d, { ...opts, amount: opts.amount * 0.74, light: opts.light * 0.86 }, fillStyle || style);
   }

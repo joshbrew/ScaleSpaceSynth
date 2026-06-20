@@ -36,23 +36,31 @@ function _injectStyle() {
     min-width: 92px;
     height: 30px;
     padding: 0 10px;
-    border: 1px solid rgba(138,184,232,0.55);
+    border: 1px solid rgba(var(--stroke-rgb), calc(0.38 * var(--btn-alpha, 1)));
     border-radius: 3px;
-    background: rgba(8, 10, 22, 0.72);
-    color: #cce6ff;
+    background: rgba(255, 255, 255, calc(0.045 * var(--btn-alpha, 1)));
+    color: rgba(230, 240, 250, calc(0.92 * var(--btn-alpha, 1)));
+    font-family: inherit;
     font-size: 9px;
     line-height: 1;
     letter-spacing: 0.12em;
     text-transform: uppercase;
     white-space: nowrap;
     cursor: pointer;
-    box-shadow: 0 0 16px rgba(82, 150, 255, 0.08);
-    backdrop-filter: blur(8px);
+    box-shadow: 0 0 12px rgba(var(--accent-rgb), calc(0.10 * var(--btn-alpha, 1)));
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
 }
 .audio-source-btn[data-active="true"] {
     color: #88ff88;
-    border-color: rgba(136,255,136,0.7);
-    box-shadow: 0 0 18px rgba(136,255,136,0.16);
+    border-color: rgba(136,255,136,calc(0.7 * var(--btn-alpha, 1)));
+    box-shadow: 0 0 18px rgba(136,255,136,calc(0.16 * var(--btn-alpha, 1)));
+}
+body[data-theme="synthesist"] .audio-source-btn {
+    color: #ffe0c8;
+    border-color: rgba(255, 170, 85, calc(0.42 * var(--btn-alpha, 1)));
+    background: rgba(255, 170, 85, calc(0.08 * var(--btn-alpha, 1)));
+    box-shadow: 0 0 12px rgba(255, 170, 85, calc(0.14 * var(--btn-alpha, 1)));
 }
 .audio-source-panel {
     position: fixed;
@@ -60,34 +68,54 @@ function _injectStyle() {
     top: 0;
     right: auto;
     bottom: auto;
-    width: min(286px, calc(100vw - 20px));
+    width: min(300px, calc(100vw - 20px));
+    min-width: 240px;
+    max-width: 400px;
     box-sizing: border-box;
     z-index: 12000;
-    max-height: min(76vh, calc(100vh - 86px));
-    overflow-y: auto;
-    overflow-x: hidden;
-    padding: 12px;
-    border: 1px solid rgba(80, 110, 160, 0.62);
-    border-radius: 5px;
-    background: rgba(6, 8, 18, 0.9);
+    max-height: min(82vh, calc(100vh - 64px));
+    overflow: hidden;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    border: 1px solid rgba(var(--stroke-rgb), 0.28);
+    border-radius: 6px;
+    background: rgba(6, 8, 18, 0.84);
     color: #cce6ff;
-    box-shadow: 0 16px 38px rgba(0,0,0,0.42);
-    backdrop-filter: blur(12px);
+    box-shadow: 0 16px 38px rgba(0,0,0,0.42), inset 0 1px 0 rgba(var(--accent-rgb), 0.06);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
 }
 .audio-source-panel.hidden { display: none; }
 .audio-source-title {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    flex: 0 0 auto;
+    padding: 8px 12px;
+    border-bottom: 1px solid rgba(var(--stroke-rgb), 0.22);
+    cursor: grab;
+    user-select: none;
+}
+.audio-source-title span:first-child {
     font-size: 10px;
-    letter-spacing: 0.12em;
+    letter-spacing: 0.25em;
     text-transform: uppercase;
-    margin-bottom: 10px;
+    color: #7a9acc;
 }
 .audio-source-status {
     font-size: 9px;
     color: #88ff88;
     letter-spacing: 0.05em;
+    text-transform: uppercase;
+}
+.audio-source-body {
+    flex: 1 1 auto;
+    min-height: 128px;
+    max-height: min(72vh, calc(100vh - 128px));
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 10px 12px 12px;
 }
 .audio-source-row {
     display: flex;
@@ -109,21 +137,26 @@ function _injectStyle() {
 }
 .audio-source-grid {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 6px;
-    margin: 8px 0 10px;
+    margin: 2px 0 10px;
 }
 .audio-source-mini-btn,
 .audio-source-action {
-    border: 1px solid rgba(90, 130, 180, 0.55);
-    background: rgba(18, 24, 42, 0.78);
+    border: 1px solid var(--field-border);
+    background: var(--field-bg);
     color: #cce6ff;
     border-radius: 3px;
-    height: 28px;
+    height: var(--ctl-h);
+    font-family: inherit;
     font-size: 9px;
     text-transform: uppercase;
     letter-spacing: 0.08em;
     cursor: pointer;
+}
+.audio-source-mini-btn:hover,
+.audio-source-action:hover {
+    border-color: var(--field-border-fc);
 }
 .audio-source-mini-btn[data-active="true"] {
     color: #88ff88;
@@ -146,7 +179,7 @@ function _injectStyle() {
     overflow: hidden;
     text-overflow: ellipsis;
     display: block;
-    line-height: 28px;
+    line-height: var(--ctl-h);
 }
 .audio-source-file-pick {
     flex: 0 0 auto;
@@ -160,7 +193,7 @@ function _injectStyle() {
 }
 .audio-source-action.settings {
     color: #bfe8ff;
-    border-color: rgba(138,184,232,0.62);
+    border-color: var(--field-border-fc);
 }
 .audio-source-field.compact {
     flex: 0 0 76px;
@@ -172,9 +205,52 @@ function _injectStyle() {
     display: flex;
     align-items: center;
     gap: 6px;
+    --range-pct: 50%;
 }
 .audio-source-range-wrap .audio-source-field {
     flex: 1;
+}
+.audio-source-range-wrap input[type="range"].audio-source-field {
+    height: 18px;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    appearance: none;
+    -webkit-appearance: none;
+    cursor: pointer;
+}
+.audio-source-range-wrap input[type="range"].audio-source-field::-webkit-slider-runnable-track {
+    height: 7px;
+    border-radius: 2px;
+    background: linear-gradient(90deg, #0d3b4a 0%, #6dffb0 var(--range-pct), rgba(217,237,246,0.08) var(--range-pct), rgba(217,237,246,0.08) 100%);
+    box-shadow: inset 0 0 0 1px rgba(var(--stroke-rgb), 0.08);
+}
+.audio-source-range-wrap input[type="range"].audio-source-field::-webkit-slider-thumb {
+    appearance: none;
+    -webkit-appearance: none;
+    width: 11px;
+    height: 11px;
+    margin-top: -2px;
+    border-radius: 50%;
+    border: 1px solid rgba(230, 255, 245, 0.78);
+    background: #6dffb0;
+    box-shadow: 0 0 8px rgba(109, 255, 176, 0.45);
+}
+.audio-source-range-wrap input[type="range"].audio-source-field::-moz-range-track {
+    height: 7px;
+    border-radius: 2px;
+    background: linear-gradient(90deg, #0d3b4a 0%, #6dffb0 var(--range-pct), rgba(217,237,246,0.08) var(--range-pct), rgba(217,237,246,0.08) 100%);
+    box-shadow: inset 0 0 0 1px rgba(var(--stroke-rgb), 0.08);
+}
+.audio-source-range-wrap input[type="range"].audio-source-field::-moz-range-thumb {
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    border: 1px solid rgba(230, 255, 245, 0.78);
+    background: #6dffb0;
+    box-shadow: 0 0 8px rgba(109, 255, 176, 0.45);
 }
 .audio-source-value {
     flex: 0 0 44px;
@@ -183,7 +259,7 @@ function _injectStyle() {
     line-height: 24px;
     text-align: right;
     padding: 0 6px;
-    border: 1px solid rgba(90, 130, 180, 0.42);
+    border: 1px solid var(--field-border);
     border-radius: 3px;
     background: rgba(2, 4, 12, 0.62);
     color: #ffe1a8;
@@ -213,14 +289,21 @@ function _injectStyle() {
 .audio-source-field {
     flex: 1;
     min-width: 0;
-    height: 28px;
-    border: 1px solid rgba(90, 130, 180, 0.45);
+    height: var(--ctl-h);
+    border: 1px solid var(--field-border);
     border-radius: 3px;
-    background: rgba(2, 4, 12, 0.7);
+    background: var(--field-bg);
     color: #e6f0fa;
     font-size: 10px;
     padding: 0 8px;
     outline: none;
+    font-family: inherit;
+}
+.audio-source-field:focus {
+    border-color: var(--field-border-fc);
+}
+.audio-source-field[type="range"] {
+    padding: 0;
 }
 .audio-source-label {
     width: 54px;
@@ -243,7 +326,7 @@ function _injectStyle() {
 }
 .audio-source-level-wrap {
     height: 5px;
-    border: 1px solid rgba(90,130,180,0.4);
+    border: 1px solid var(--field-border);
     border-radius: 999px;
     background: rgba(2,4,12,0.7);
     overflow: hidden;
@@ -261,6 +344,71 @@ function _injectStyle() {
     color: #8198b8;
     font-size: 9px;
     line-height: 1.35;
+}
+.audio-source-resize-handle {
+    height: 7px;
+    width: 100%;
+    cursor: ns-resize;
+    flex: 0 0 auto;
+    position: relative;
+    border-bottom-left-radius: inherit;
+    border-bottom-right-radius: inherit;
+}
+.audio-source-resize-handle::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: 26px;
+    height: 3px;
+    border-radius: 2px;
+    background: rgba(var(--stroke-rgb), 0.25);
+    transition: background 140ms ease, width 140ms ease;
+}
+.audio-source-resize-handle:hover::after,
+.audio-source-resize-handle.dragging::after {
+    background: rgba(var(--stroke-rgb), 0.70);
+    width: 34px;
+}
+body[data-theme="synthesist"] .audio-source-panel {
+    border-color: rgba(80, 50, 30, 0.55);
+    background: rgba(20, 11, 24, 0.78);
+    color: #ffe0c8;
+    box-shadow: 0 0 20px rgba(255, 121, 198, 0.06), inset 0 1px 0 rgba(255, 170, 85, 0.05), 0 16px 38px rgba(0,0,0,0.42);
+}
+body[data-theme="synthesist"] .audio-source-title span:first-child {
+    color: #ffaa55;
+}
+body[data-theme="synthesist"] .audio-source-label {
+    color: #b08070;
+}
+body[data-theme="synthesist"] .audio-source-help,
+body[data-theme="synthesist"] .audio-source-random-note,
+body[data-theme="synthesist"] .audio-source-preset-info,
+body[data-theme="synthesist"] .audio-source-check {
+    color: #b08070;
+}
+body[data-theme="synthesist"] .audio-source-mini-btn,
+body[data-theme="synthesist"] .audio-source-action,
+body[data-theme="synthesist"] .audio-source-field {
+    color: #f0e0d0;
+}
+body[data-theme="synthesist"] .audio-source-range-wrap input[type="range"].audio-source-field::-webkit-slider-runnable-track {
+    background: linear-gradient(90deg, #5a2438 0%, #ffaa55 var(--range-pct), rgba(255,170,85,0.10) var(--range-pct), rgba(255,170,85,0.10) 100%);
+}
+body[data-theme="synthesist"] .audio-source-range-wrap input[type="range"].audio-source-field::-webkit-slider-thumb {
+    border-color: rgba(255, 225, 185, 0.84);
+    background: #ffaa55;
+    box-shadow: 0 0 8px rgba(255, 170, 85, 0.52);
+}
+body[data-theme="synthesist"] .audio-source-range-wrap input[type="range"].audio-source-field::-moz-range-track {
+    background: linear-gradient(90deg, #5a2438 0%, #ffaa55 var(--range-pct), rgba(255,170,85,0.10) var(--range-pct), rgba(255,170,85,0.10) 100%);
+}
+body[data-theme="synthesist"] .audio-source-range-wrap input[type="range"].audio-source-field::-moz-range-thumb {
+    border-color: rgba(255, 225, 185, 0.84);
+    background: #ffaa55;
+    box-shadow: 0 0 8px rgba(255, 170, 85, 0.52);
 }
 `;
     document.head.appendChild(st);
@@ -331,7 +479,16 @@ function _mkRangeRow(label, input) {
     wrap.className = 'audio-source-range-wrap';
     const value = document.createElement('div');
     value.className = 'audio-source-value';
-    const sync = () => { value.textContent = _formatRangeValue(input); };
+    const sync = () => {
+        value.textContent = _formatRangeValue(input);
+        const min = Number(input.min || 0);
+        const max = Number(input.max || 1);
+        const val = Number(input.value || 0);
+        const pct = Number.isFinite(min) && Number.isFinite(max) && max !== min
+            ? Math.max(0, Math.min(100, ((val - min) / (max - min)) * 100))
+            : 0;
+        wrap.style.setProperty('--range-pct', pct.toFixed(2) + '%');
+    };
     input._syncAudioSourceValue = sync;
     input.addEventListener('input', sync);
     input.addEventListener('change', sync);
@@ -396,9 +553,13 @@ export function initAudioSourceButton() {
     title.appendChild(status);
     panel.appendChild(title);
 
+    const panelBody = document.createElement('div');
+    panelBody.className = 'audio-source-body';
+    panel.appendChild(panelBody);
+
     const grid = document.createElement('div');
     grid.className = 'audio-source-grid';
-    panel.appendChild(grid);
+    panelBody.appendChild(grid);
 
     const sourceBtns = new Map();
     for (const src of SOURCES) {
@@ -412,7 +573,7 @@ export function initAudioSourceButton() {
     fileInput.type = 'file';
     fileInput.accept = 'audio/*,.mp3,.wav,.ogg,.m4a,.flac';
     fileInput.style.display = 'none';
-    panel.appendChild(fileInput);
+    panelBody.appendChild(fileInput);
 
     const filePick = _mkButton('Choose File', 'audio-source-action audio-source-file-pick');
     const fileName = document.createElement('div');
@@ -422,14 +583,14 @@ export function initAudioSourceButton() {
     fileWrap.style.cssText = 'display:flex;gap:6px;flex:1;min-width:0;';
     fileWrap.appendChild(fileName);
     fileWrap.appendChild(filePick);
-    panel.appendChild(_mkRow('File', fileWrap));
+    panelBody.appendChild(_mkRow('File', fileWrap));
 
     const urlInput = document.createElement('input');
     urlInput.className = 'audio-source-field';
     urlInput.type = 'url';
     urlInput.placeholder = 'https://.../audio.mp3';
     urlInput.value = window.S.audioUrl || '';
-    panel.appendChild(_mkRow('URL', urlInput));
+    panelBody.appendChild(_mkRow('URL', urlInput));
 
     const seekInput = document.createElement('input');
     seekInput.className = 'audio-source-field';
@@ -444,17 +605,27 @@ export function initAudioSourceButton() {
     seekTime.textContent = '0:00 / 0:00';
     const seekWrap = document.createElement('div');
     seekWrap.className = 'audio-source-range-wrap';
+    const syncSeekPct = () => {
+        const min = Number(seekInput.min || 0);
+        const max = Number(seekInput.max || 1);
+        const val = Number(seekInput.value || 0);
+        const pct = Number.isFinite(min) && Number.isFinite(max) && max !== min
+            ? Math.max(0, Math.min(100, ((val - min) / (max - min)) * 100))
+            : 0;
+        seekWrap.style.setProperty('--range-pct', pct.toFixed(2) + '%');
+    };
     seekWrap.appendChild(seekInput);
     seekWrap.appendChild(seekTime);
+    syncSeekPct();
     const seekRow = _mkRow('Seek', seekWrap);
     seekRow.style.display = 'none';
-    panel.appendChild(seekRow);
+    panelBody.appendChild(seekRow);
 
     const micSelect = _mkSelect();
-    panel.appendChild(_mkRow('Mic', micSelect));
+    panelBody.appendChild(_mkRow('Mic', micSelect));
 
     const historySelect = _mkSelect();
-    panel.appendChild(_mkRow('Last 10', historySelect));
+    panelBody.appendChild(_mkRow('Last 10', historySelect));
 
     const sourceModeSelect = _mkSelect();
     for (const [value, label] of [
@@ -468,7 +639,7 @@ export function initAudioSourceButton() {
         sourceModeSelect.appendChild(opt);
     }
     sourceModeSelect.value = window.S.randomizerSourceMode || 'both';
-    panel.appendChild(_mkRow('RNG', sourceModeSelect));
+    panelBody.appendChild(_mkRow('RNG', sourceModeSelect));
 
     const randomWrap = document.createElement('div');
     randomWrap.style.cssText = 'display:flex;gap:6px;flex:1;min-width:0;align-items:center;';
@@ -479,7 +650,7 @@ export function initAudioSourceButton() {
     randomNote.textContent = 'safe stress-test reroll';
     randomWrap.appendChild(randomBtn);
     randomWrap.appendChild(randomNote);
-    panel.appendChild(_mkRow('Test', randomWrap));
+    panelBody.appendChild(_mkRow('Test', randomWrap));
 
     const continuousWrap = document.createElement('div');
     continuousWrap.style.cssText = 'display:flex;gap:6px;flex:1;min-width:0;align-items:center;';
@@ -505,7 +676,7 @@ export function initAudioSourceButton() {
     continuousWrap.appendChild(continuousLab);
     continuousWrap.appendChild(transitionInput);
     continuousWrap.appendChild(transitionSuffix);
-    panel.appendChild(_mkRow('Auto', continuousWrap));
+    panelBody.appendChild(_mkRow('Auto', continuousWrap));
 
 
     const perfSelect = _mkSelect();
@@ -521,7 +692,7 @@ export function initAudioSourceButton() {
         perfSelect.appendChild(opt);
     }
     perfSelect.value = window.S.perfProfile || 'balanced';
-    panel.appendChild(_mkRow('Perf', perfSelect));
+    panelBody.appendChild(_mkRow('Perf', perfSelect));
 
     const settingsWrap = document.createElement('div');
     settingsWrap.style.cssText = 'display:flex;gap:6px;flex:1;min-width:0;';
@@ -531,13 +702,13 @@ export function initAudioSourceButton() {
     importSettingsBtn.style.flex = '1';
     settingsWrap.appendChild(exportSettingsBtn);
     settingsWrap.appendChild(importSettingsBtn);
-    panel.appendChild(_mkRow('JSON', settingsWrap));
+    panelBody.appendChild(_mkRow('JSON', settingsWrap));
 
     const settingsImportInput = document.createElement('input');
     settingsImportInput.type = 'file';
     settingsImportInput.accept = '.json,application/json';
     settingsImportInput.style.display = 'none';
-    panel.appendChild(settingsImportInput);
+    panelBody.appendChild(settingsImportInput);
 
     const hzInput = document.createElement('input');
     hzInput.className = 'audio-source-field';
@@ -555,7 +726,7 @@ export function initAudioSourceButton() {
     volume.max = '1';
     volume.step = '0.01';
     volume.value = String(window.S.volume ?? 0.5);
-    panel.appendChild(_mkRangeRow('Volume', volume));
+    panelBody.appendChild(_mkRangeRow('Volume', volume));
 
     const optsRow = document.createElement('div');
     optsRow.className = 'audio-source-row';
@@ -576,7 +747,7 @@ export function initAudioSourceButton() {
     muteLab.appendChild(document.createTextNode('Mute output'));
     optsRow.appendChild(loopLab);
     optsRow.appendChild(muteLab);
-    panel.appendChild(optsRow);
+    panelBody.appendChild(optsRow);
 
     const optsRow2 = document.createElement('div');
     optsRow2.className = 'audio-source-row tight-wrap';
@@ -597,7 +768,7 @@ export function initAudioSourceButton() {
     monitorLab.appendChild(document.createTextNode('Monitor mic/system'));
     optsRow2.appendChild(reactiveLab);
     optsRow2.appendChild(monitorLab);
-    panel.appendChild(optsRow2);
+    panelBody.appendChild(optsRow2);
 
     const fxPowerRow = document.createElement('div');
     fxPowerRow.className = 'audio-source-row';
@@ -610,7 +781,7 @@ export function initAudioSourceButton() {
     fxLab.appendChild(fxToggle);
     fxLab.appendChild(document.createTextNode('Visualizer FX'));
     fxPowerRow.appendChild(fxLab);
-    panel.appendChild(_mkRow('FX Power', fxPowerRow));
+    panelBody.appendChild(_mkRow('FX Power', fxPowerRow));
 
     const fx2DRow = document.createElement('div');
     fx2DRow.className = 'audio-source-row';
@@ -633,7 +804,7 @@ export function initAudioSourceButton() {
     fx2DSelect.value = window.S.visualEffect2DBackdropStyle || 'classic';
     fx2DRow.appendChild(fx2DLab);
     fx2DRow.appendChild(fx2DSelect);
-    panel.appendChild(_mkRow('2D FX', fx2DRow));
+    panelBody.appendChild(_mkRow('2D FX', fx2DRow));
 
     const fxLayerRow = document.createElement('div');
     fxLayerRow.className = 'audio-source-row';
@@ -656,7 +827,7 @@ export function initAudioSourceButton() {
     fxSelect.value = window.S.visualEffectStyle || 'random';
     fxLayerRow.appendChild(fx3DLab);
     fxLayerRow.appendChild(fxSelect);
-    panel.appendChild(_mkRow('3D FX', fxLayerRow));
+    panelBody.appendChild(_mkRow('3D FX', fxLayerRow));
 
     const fx2DMix = document.createElement('input');
     fx2DMix.className = 'audio-source-field';
@@ -665,13 +836,32 @@ export function initAudioSourceButton() {
     fx2DMix.max = '2.5';
     fx2DMix.step = '0.01';
     fx2DMix.value = String(window.S.visualEffect2DBackdropMix ?? 1.0);
-    panel.appendChild(_mkRangeRow('2D Bright', fx2DMix));
+    panelBody.appendChild(_mkRangeRow('2D Bright', fx2DMix));
 
     const fx2DFade = _rangeInput(window.S.visualEffect2DFade ?? 0.01, 0, 1, 0.01);
-    panel.appendChild(_mkRangeRow('2D Fade', fx2DFade));
+    panelBody.appendChild(_mkRangeRow('2D Fade', fx2DFade));
 
     const fx3DFade = _rangeInput(window.S.visualEffect3DFade ?? 0.5, 0, 1, 0.01);
-    panel.appendChild(_mkRangeRow('3D Fade', fx3DFade));
+    panelBody.appendChild(_mkRangeRow('3D Fade', fx3DFade));
+
+    const _animationModeSelect = (value = 'auto') => {
+        const select = _mkSelect();
+        const options = [
+            ['auto', 'Auto'],
+            ['smooth', 'Smooth'],
+            ['held12', 'Held 12']
+        ];
+        for (const [v, label] of options) {
+            const opt = document.createElement('option');
+            opt.value = v;
+            opt.textContent = label;
+            select.appendChild(opt);
+        }
+        select.value = value === 'held4' ? 'held12' : (['auto', 'smooth', 'held12'].includes(value) ? value : 'auto');
+        return select;
+    };
+    const backdropAnimationMode = _animationModeSelect(window.S.backdropAnimationMode || 'auto');
+    panelBody.appendChild(_mkRow('2D Anim', backdropAnimationMode));
 
     const fxOptsRow = document.createElement('div');
     fxOptsRow.className = 'audio-source-row tight-wrap';
@@ -692,7 +882,7 @@ export function initAudioSourceButton() {
     autoFxLab.appendChild(document.createTextNode('Auto FX on start'));
     fxOptsRow.appendChild(fxRandLab);
     fxOptsRow.appendChild(autoFxLab);
-    panel.appendChild(fxOptsRow);
+    panelBody.appendChild(fxOptsRow);
 
     const fxAmount = document.createElement('input');
     fxAmount.className = 'audio-source-field';
@@ -701,19 +891,19 @@ export function initAudioSourceButton() {
     fxAmount.max = '2.5';
     fxAmount.step = '0.01';
     fxAmount.value = String(window.S.visualEffectAmount ?? 1.05);
-    panel.appendChild(_mkRangeRow('FX Amount', fxAmount));
+    panelBody.appendChild(_mkRangeRow('FX Amount', fxAmount));
 
     const audioParticleDrive = _rangeInput(window.S.audioParticleDrive ?? 1.0, 0, 3, 0.01);
-    panel.appendChild(_mkRangeRow('Param Drive', audioParticleDrive));
+    panelBody.appendChild(_mkRangeRow('Param Drive', audioParticleDrive));
 
     const audioParticleMotionDrive = _rangeInput(window.S.audioParticleMotionDrive ?? 1.0, 0, 3, 0.01);
-    panel.appendChild(_mkRangeRow('Motion Drive', audioParticleMotionDrive));
+    panelBody.appendChild(_mkRangeRow('Motion Drive', audioParticleMotionDrive));
 
     const audioParticleColorDrive = _rangeInput(window.S.audioParticleColorDrive ?? 1.0, 0, 3, 0.01);
-    panel.appendChild(_mkRangeRow('Color Drive', audioParticleColorDrive));
+    panelBody.appendChild(_mkRangeRow('Color Drive', audioParticleColorDrive));
 
     const audioReactiveGain = _rangeInput(window.S.audioReactiveGain ?? 5.2, 0, 16, 0.01);
-    panel.appendChild(_mkRangeRow('Input Gain', audioReactiveGain));
+    panelBody.appendChild(_mkRangeRow('Input Gain', audioReactiveGain));
 
     const actionRow = document.createElement('div');
     actionRow.className = 'audio-source-row';
@@ -723,29 +913,78 @@ export function initAudioSourceButton() {
     stopBtn.style.flex = '1';
     actionRow.appendChild(startBtn);
     actionRow.appendChild(stopBtn);
-    panel.appendChild(actionRow);
+    panelBody.appendChild(actionRow);
 
     const levelWrap = document.createElement('div');
     levelWrap.className = 'audio-source-level-wrap';
     const level = document.createElement('div');
     level.className = 'audio-source-level';
     levelWrap.appendChild(level);
-    panel.appendChild(levelWrap);
+    panelBody.appendChild(levelWrap);
 
     const help = document.createElement('div');
     help.className = 'audio-source-help';
     help.textContent = 'Mute output only silences speakers. The analyser can drive the 2D backdrop and the 3D FX independently, or both at once. System Audio uses the browser share picker.';
-    panel.appendChild(help);
+    panelBody.appendChild(help);
+
+    const resizeHandle = document.createElement('div');
+    resizeHandle.className = 'audio-source-resize-handle';
+    resizeHandle.title = 'Drag to resize · double-click to fit';
+    panel.appendChild(resizeHandle);
 
     const dock = document.getElementById('dock');
     const uiRoot = dock || document.getElementById('ui-root') || document.body;
     uiRoot.appendChild(root);
 
+    const AUDIO_PANEL_LAYOUT_KEY = 'ss_audio_source_panel';
+    const CSS_LEN_RE = /^-?\d+(?:\.\d+)?(?:px|%)?$/;
+    const safeCssLen = (value) => (typeof value === 'string' && CSS_LEN_RE.test(value)) ? value : '';
+
+    function viewportAudioBodyCap() {
+        const pad = 10;
+        const titleH = title.getBoundingClientRect().height || 34;
+        const handleH = resizeHandle.getBoundingClientRect().height || 7;
+        return Math.max(128, window.innerHeight - pad * 2 - titleH - handleH);
+    }
+
+    function syncAudioPanelMaxHeight() {
+        const pad = 10;
+        panel.style.maxHeight = Math.max(180, window.innerHeight - pad * 2) + 'px';
+        panelBody.style.maxHeight = viewportAudioBodyCap() + 'px';
+    }
+
+    function saveAudioPanelLayout() {
+        const layout = {
+            left: panel.style.left || '',
+            top: panel.style.top || '',
+            userPositioned: !!audioPanelUserPositioned,
+            bodyH: panelBody.style.height || ''
+        };
+        try { localStorage.setItem(AUDIO_PANEL_LAYOUT_KEY, JSON.stringify(layout)); } catch (e) {}
+    }
+
+    function loadAudioPanelLayout() {
+        try {
+            const raw = localStorage.getItem(AUDIO_PANEL_LAYOUT_KEY);
+            if (!raw) return;
+            const layout = JSON.parse(raw);
+            if (!layout || typeof layout !== 'object') return;
+            const left = safeCssLen(layout.left);
+            const top = safeCssLen(layout.top);
+            const bodyH = safeCssLen(layout.bodyH);
+            if (left) panel.style.left = left;
+            if (top) panel.style.top = top;
+            if (bodyH) panelBody.style.height = bodyH;
+            audioPanelUserPositioned = !!layout.userPositioned && !!left && !!top;
+        } catch (e) {}
+    }
+    loadAudioPanelLayout();
+
     function clampAudioPanelPosition() {
         const pad = 10;
-        const pw = Math.min(panel.offsetWidth || 286, Math.max(220, window.innerWidth - pad * 2));
+        syncAudioPanelMaxHeight();
+        const pw = Math.min(panel.offsetWidth || 300, Math.max(220, window.innerWidth - pad * 2));
         const ph = Math.min(panel.offsetHeight || panel.scrollHeight || 420, Math.max(180, window.innerHeight - pad * 2));
-        panel.style.maxHeight = Math.max(160, window.innerHeight - pad * 2) + 'px';
         const curLeft = Number.parseFloat(panel.style.left || '0');
         const curTop = Number.parseFloat(panel.style.top || '0');
         const left = Math.max(pad, Math.min(window.innerWidth - pw - pad, Number.isFinite(curLeft) ? curLeft : pad));
@@ -759,14 +998,14 @@ export function initAudioSourceButton() {
     function placeAudioPanel() {
         if (panel.classList.contains('hidden')) return;
         const pad = 10;
+        syncAudioPanelMaxHeight();
         if (audioPanelUserPositioned) {
             clampAudioPanelPosition();
             return;
         }
         const br = mainBtn.getBoundingClientRect();
-        const pw = Math.min(panel.offsetWidth || 286, Math.max(220, window.innerWidth - pad * 2));
+        const pw = Math.min(panel.offsetWidth || 300, Math.max(220, window.innerWidth - pad * 2));
         const ph = Math.min(panel.offsetHeight || panel.scrollHeight || 420, Math.max(180, window.innerHeight - pad * 2));
-        panel.style.maxHeight = Math.max(160, window.innerHeight - pad * 2) + 'px';
         let left = br.right - pw;
         let top = br.top - ph - 8;
         if (top < pad) top = br.bottom + 8;
@@ -778,6 +1017,56 @@ export function initAudioSourceButton() {
         panel.style.bottom = 'auto';
     }
     window.placeAudioSourcePanel = placeAudioPanel;
+
+    let resizeState = null;
+    function targetAudioBodyHeight(clientY) {
+        if (!resizeState) return panelBody.getBoundingClientRect().height;
+        const dy = clientY - resizeState.startY;
+        return Math.max(128, Math.min(resizeState.startH + dy, resizeState.cap));
+    }
+    const endResize = (commit, clientY = 0) => {
+        if (!resizeState) return;
+        if (commit) {
+            const h = targetAudioBodyHeight(clientY);
+            if (h >= resizeState.cap - 1) panelBody.style.height = '';
+            else panelBody.style.height = h + 'px';
+            saveAudioPanelLayout();
+            clampAudioPanelPosition();
+        }
+        resizeState = null;
+        resizeHandle.classList.remove('dragging');
+        document.removeEventListener('pointermove', onAudioResizeMove);
+        document.removeEventListener('pointerup', onAudioResizeUp);
+        document.removeEventListener('pointercancel', onAudioResizeCancel);
+    };
+    function onAudioResizeMove(e) {
+        if (!resizeState) return;
+        panelBody.style.height = targetAudioBodyHeight(e.clientY) + 'px';
+        e.preventDefault();
+    }
+    function onAudioResizeUp(e) { endResize(true, e.clientY); }
+    function onAudioResizeCancel() { endResize(false, 0); }
+    resizeHandle.addEventListener('pointerdown', (e) => {
+        if (e.button !== undefined && e.button !== 0) return;
+        syncAudioPanelMaxHeight();
+        resizeState = {
+            startY: e.clientY,
+            startH: panelBody.getBoundingClientRect().height,
+            cap: Math.min(panelBody.scrollHeight, viewportAudioBodyCap())
+        };
+        resizeHandle.classList.add('dragging');
+        document.addEventListener('pointermove', onAudioResizeMove);
+        document.addEventListener('pointerup', onAudioResizeUp);
+        document.addEventListener('pointercancel', onAudioResizeCancel);
+        e.preventDefault();
+        e.stopPropagation();
+    });
+    resizeHandle.addEventListener('dblclick', (e) => {
+        panelBody.style.height = '';
+        saveAudioPanelLayout();
+        clampAudioPanelPosition();
+        e.preventDefault();
+    });
 
     let dragState = null;
     title.addEventListener('pointerdown', (e) => {
@@ -801,9 +1090,14 @@ export function initAudioSourceButton() {
         if (!dragState) return;
         dragState = null;
         try { title.releasePointerCapture(e.pointerId); } catch (err) {}
+        saveAudioPanelLayout();
     };
     title.addEventListener('pointerup', endDrag);
     title.addEventListener('pointercancel', endDrag);
+    window.addEventListener('resize', () => {
+        syncAudioPanelMaxHeight();
+        placeAudioPanel();
+    });
 
     function collectState(changedKeys = null) {
         const allAudioControlKeys = [
@@ -811,6 +1105,7 @@ export function initAudioSourceButton() {
             'visualEffects', 'visualEffectStyle', 'visualEffect2DBackdrop', 'visualEffectBackdrop',
             'visualEffect2DBackdropStyle', 'visualEffect2DBackdropMix', 'visualEffect2DFade',
             'visualEffect3DFade', 'visualEffectPost', 'visualEffectRandomize', 'audioAutoEnableVisuals',
+            'backdropAnimationMode', 'backdropAnimationThrottle', 'backdropAnimationFps',
             'randomizerSourceMode', 'visualEffectAmount', 'audioParticleDrive',
             'audioParticleMotionDrive', 'audioParticleColorDrive', 'audioReactiveGain',
             'audioDeviceId', 'audioOscHz', 'volume', 'perfProfile'
@@ -830,6 +1125,9 @@ export function initAudioSourceButton() {
         window.S.visualEffect2DFade = Math.max(0, Math.min(1, Number(fx2DFade.value) || 0));
         window.S.visualEffect3DFade = Math.max(0, Math.min(1, Number(fx3DFade.value) || 0));
         window.S.visualEffectPost = !!fx3DToggle.checked;
+        window.S.backdropAnimationMode = backdropAnimationMode.value === 'held4' ? 'held12' : (['auto', 'smooth', 'held12'].includes(backdropAnimationMode.value) ? backdropAnimationMode.value : 'auto');
+        window.S.backdropAnimationThrottle = window.S.backdropAnimationMode === 'held12';
+        window.S.backdropAnimationFps = 12;
         window.S.visualEffectRandomize = !!fxRand.checked;
         window.S.audioAutoEnableVisuals = !!autoFx.checked;
         window.S.randomizerSourceMode = ['true-random', 'atlas-codes', 'both'].includes(sourceModeSelect.value) ? sourceModeSelect.value : 'both';
@@ -872,6 +1170,7 @@ export function initAudioSourceButton() {
         fx2DFade.value = String(window.S.visualEffect2DFade ?? 0.01);
         fx3DFade.value = String(window.S.visualEffect3DFade ?? 0.5);
         fx3DToggle.checked = (window.S.visualEffectPost !== false);
+        backdropAnimationMode.value = window.S.backdropAnimationMode === 'held4' ? 'held12' : (['auto', 'smooth', 'held12'].includes(window.S.backdropAnimationMode) ? window.S.backdropAnimationMode : 'auto');
         if (typeof fxRand !== 'undefined') fxRand.checked = window.S.visualEffectRandomize !== false;
         if (typeof autoFx !== 'undefined') autoFx.checked = window.S.audioAutoEnableVisuals !== false;
         if (typeof sourceModeSelect !== 'undefined') sourceModeSelect.value = window.S.randomizerSourceMode || 'both';
@@ -982,12 +1281,14 @@ export function initAudioSourceButton() {
         seekInput.disabled = !seekable;
         if (!seekable) {
             if (!seekDragging) seekInput.value = '0';
+            syncSeekPct();
             seekTime.textContent = '0:00 / 0:00';
             return;
         }
         const dur = Math.max(0.001, Number(tr.duration) || 0.001);
         const cur = Math.max(0, Math.min(dur, Number(tr.currentTime) || 0));
         if (!seekDragging) seekInput.value = String(cur / dur);
+        syncSeekPct();
         seekTime.textContent = `${_formatTime(cur)} / ${_formatTime(dur)}`;
     }
 
@@ -1148,6 +1449,7 @@ export function initAudioSourceButton() {
     seekInput.addEventListener('pointerdown', () => { seekDragging = true; });
     seekInput.addEventListener('pointerup', () => { seekDragging = false; });
     seekInput.addEventListener('input', () => {
+        syncSeekPct();
         const tr = window.audio && typeof window.audio.getTransport === 'function' ? window.audio.getTransport() : null;
         const dur = tr && tr.duration > 0 ? tr.duration : 0;
         seekTime.textContent = `${_formatTime((Number(seekInput.value) || 0) * dur)} / ${_formatTime(dur)}`;
@@ -1157,6 +1459,7 @@ export function initAudioSourceButton() {
         const dur = tr && tr.duration > 0 ? tr.duration : 0;
         if (dur > 0 && window.audio && typeof window.audio.seek === 'function') window.audio.seek((Number(seekInput.value) || 0) * dur);
         seekDragging = false;
+        syncSeekPct();
         updateSeekUI();
     });
     window.setInterval(updateSeekUI, 250);
@@ -1193,6 +1496,7 @@ export function initAudioSourceButton() {
     fx2DMix.addEventListener('input', () => collectState(['visualEffect2DBackdropMix']));
     fx2DFade.addEventListener('input', () => collectState(['visualEffect2DFade']));
     fx3DFade.addEventListener('input', () => collectState(['visualEffect3DFade']));
+    backdropAnimationMode.addEventListener('change', () => collectState(['backdropAnimationMode', 'backdropAnimationThrottle', 'backdropAnimationFps']));
     fxRand.addEventListener('change', () => collectState(['visualEffectRandomize']));
     autoFx.addEventListener('change', () => collectState(['audioAutoEnableVisuals']));
     sourceModeSelect.addEventListener('change', () => collectState(['randomizerSourceMode']));

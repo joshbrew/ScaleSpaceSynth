@@ -1,14 +1,14 @@
 import * as THREE from 'three/webgpu';
 import {
-    pass, color, mix, positionLocal, attribute, pointWidth,
-    float, vec2, vec3, vec4, instanceIndex, uniform,
+    pass, color, mix, positionLocal, attribute,
+    float, vec3, vec4, instanceIndex, uniform,
     dot, length, normalize, sub, add, mul, sin, cos, fract, floor,
-    compute, storage, Fn, time, max, min, div, mx_noise_float, step,
-    atomicAdd, atomicStore, uint, int, mod, If, bitAnd, Loop, select, clamp, abs,
+    compute, storage, Fn, time, max, min, div, step,
+    atomicAdd, atomicStore, uint, int, If, bitAnd, Loop, select, clamp, abs,
     sqrt, pow, log2,
-    instancedBufferAttribute, modelViewMatrix, cameraProjectionMatrix, vertexIndex, billboarding, cross
+    modelViewMatrix, cameraProjectionMatrix, vertexIndex, cross
 } from 'three/tsl';
-import { noise3d, curlNoise, spectralColor, specCore, catmullRomPos, catmullRomTan } from './engine-nodes.js';
+import { curlNoise, spectralColor, specCore } from './engine-nodes.js';
 import { createParticleInitWorker, generateParticleBuffersSync, particleSeed } from './particle-init.js';
 import {
     clampActiveParticleCount, getPerformanceSettings, resolveLatticeParticleCount,
@@ -17,39 +17,49 @@ import {
 import { resolveRuntimeVisualStyle, visualStyleHasGeometry } from './visual-style-registry.js';
 
 const DEFAULT_ORBIT_DIST = 100;
+const DEFAULT_ORBIT_OFFSET = new THREE.Vector3(-11, 32, -16);
+const ORBIT_ROTATE_SPEED = 0.006;
+const ORBIT_KEY_SPEED = 0.024;
+const TAU = Math.PI * 2;
 const STATE_SWIM_SEED = 1.61803398875;
 
-function ensureGeometryUv(geometry, fallbackCount = 0) {
-    if (!geometry || typeof geometry.setAttribute !== 'function') return geometry;
-    const pos = geometry.getAttribute && geometry.getAttribute('position');
-    const current = geometry.getAttribute && geometry.getAttribute('uv');
-    const count = Math.max(0, Math.floor((pos && pos.count) || fallbackCount || 0));
-    if (!count) return geometry;
-    if (current && current.count === count) return geometry;
-
-    const arr = new Float32Array(count * 2);
-    // For ordinary quads/planes, preserve the usual corner mapping so any
-    // material that samples uv still behaves. For points/lines, this simply
-    // supplies a harmless neutral/generated coordinate.
-    if (count === 4) {
-        arr.set([0, 1, 1, 1, 0, 0, 1, 0]);
-    } else {
-        for (let i = 0; i < count; i++) {
-            arr[i * 2 + 0] = (i & 1) ? 1 : 0;
-            arr[i * 2 + 1] = ((i >> 1) & 1) ? 1 : 0;
-        }
-    }
-    const attr = new THREE.BufferAttribute(arr, 2);
-    if (THREE.DynamicDrawUsage !== undefined) attr.setUsage(THREE.DynamicDrawUsage);
-    geometry.setAttribute('uv', attr);
-    return geometry;
+function wrapOrbitAngle(v) {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return 0;
+    return ((((n + Math.PI) % TAU) + TAU) % TAU) - Math.PI;
 }
 
-function ensureObjectTreeUvs(root) {
-    if (!root || typeof root.traverse !== 'function') return;
-    root.traverse((obj) => {
-        if (obj && obj.geometry) ensureGeometryUv(obj.geometry);
-    });
+function orbitAnglesFromOffset(offset) {
+    const x = Number(offset?.x) || 0;
+    const y = Number(offset?.y) || 0;
+    const z = Number(offset?.z) || 0;
+    const r = Math.max(1e-6, Math.sqrt(x * x + y * y + z * z));
+    return {
+        yaw: Math.atan2(x, z),
+        pitch: wrapOrbitAngle(Math.asin(Math.max(-1, Math.min(1, y / r))))
+    };
+}
+
+function orbitOffsetFromAngles(yaw, pitch, dist) {
+    const d = Math.max(1, Number(dist) || DEFAULT_ORBIT_DIST);
+    const y = wrapOrbitAngle(yaw);
+    const p = wrapOrbitAngle(pitch);
+    const cp = Math.cos(p);
+    return new THREE.Vector3(
+        Math.sin(y) * cp * d,
+        Math.sin(p) * d,
+        Math.cos(y) * cp * d
+    );
+}
+
+function orbitUpFromAngles(yaw, pitch) {
+    const y = wrapOrbitAngle(yaw);
+    const p = wrapOrbitAngle(pitch);
+    return new THREE.Vector3(
+        -Math.sin(y) * Math.sin(p),
+        Math.cos(p),
+        -Math.cos(y) * Math.sin(p)
+    ).normalize();
 }
 
 function resolveConcreteVisualStyle(configStyle, runtimeStyle) {
@@ -74,6 +84,7 @@ export class Engine {
         this._lastPerfPixelRatio = 0;
         this._gpuResetReady = false;
         this._lastGpuResetAt = 0;
+        this._compatCpuWarmfillRequested = false;
 
         this.setupRenderer();
         this.setupScene();
@@ -82,54 +93,198 @@ export class Engine {
         this.setupCompute();
         this.setupMaterial();
         this.setupMesh();
-        this.setupCompatParticleCloud();
-        this.setupCompatStructureLayers();
+        this.setupGpuPointCloud();
         this.setupRibbon();
         this.setupLattice();
         this.setupNavigationArrow();
     }
 
+    isGpuPointsMode() {
+        const S = window.S || {};
+        return S.shape === 'point';
+    }
+
+    isCompatParticleFallbackActive() {
+        return window.S?.compatParticleFallback === true;
+    }
+
+    isPointsFallbackActive() {
+        return this.isCompatParticleFallbackActive();
+    }
+
+    isPointDrawActive() {
+        return (this.isGpuPointsMode() && !!this.gpuPointCloud) || this.isCompatParticleFallbackActive();
+    }
+
+    updatePointDrawState() {
+        const S = window.S || {};
+        const gpuActive = this.isGpuPointsMode() && !!this.gpuPointCloud;
+        const compatActive = this.isCompatParticleFallbackActive();
+        if (S.perfParticleDrawMode !== (gpuActive ? 'points' : 'native')) S.perfParticleDrawMode = gpuActive ? 'points' : 'native';
+        const state = {
+            active: gpuActive || compatActive,
+            gpuActive,
+            compatActive,
+            autoActive: false,
+            manualActive: compatActive,
+            mode: gpuActive ? 'points' : 'native',
+            reason: gpuActive ? 'manual points' : (compatActive ? 'compat fallback' : 'native')
+        };
+        window.SS_POINTS_FALLBACK = state;
+        return state.active;
+    }
+
+    ensureCompatParticleCloud() {
+        if (this.compatParticleCloud) return true;
+        this.setupCompatParticleCloud();
+        return !!this.compatParticleCloud;
+    }
+
+    ensureCompatStructureLayers() {
+        if (this.compatRibbonLayer && this.compatCurveLayer && this.compatCellLayer) return true;
+        this.setupCompatStructureLayers();
+        return !!(this.compatRibbonLayer && this.compatCurveLayer && this.compatCellLayer);
+    }
+
+    _ensureCompatCpuWarmfill() {
+        if (this._compatCpuWarmfillRequested || !this.reinitializeParticles) return;
+        this._compatCpuWarmfillRequested = true;
+        this.reinitializeParticles({ preferGpu: false })
+            .catch(e => console.warn('[points fallback] CPU particle warm fill failed:', e && e.message ? e.message : e));
+    }
+
     updatePerformanceParticleScale() {
         const S = window.S || {};
         const enabled = S.perfParticleScaling === true;
-        const minScale = Math.max(0.25, Math.min(1, Number(S.perfParticleScaleMin) || 0.45));
-        if (!enabled) {
-            this._perfParticleScale = this._perfParticleScale == null ? 1 : this._perfParticleScale + (1 - this._perfParticleScale) * 0.10;
-            if (Math.abs(this._perfParticleScale - 1) < 0.002) this._perfParticleScale = 1;
-            const info = {
-                enabled: false,
-                scale: this._perfParticleScale,
-                target: 1,
-                minScale,
-                active: this.getActiveParticleCount(),
-                requested: this.getTargetParticleCount()
+        const safety = this.getAdaptiveCullingSafetyState();
+        const baseMinScale = Math.max(0.25, Math.min(1, Number(S.perfParticleScaleMin) || 0.45));
+        const safetyMinScale = [baseMinScale, 0.42, 0.34, 0.28][Math.max(0, Math.min(3, safety.level | 0))] ?? baseMinScale;
+        const minScale = Math.min(baseMinScale, safetyMinScale);
+        const requested = this.getTargetParticleCount();
+        const publishInfo = (info) => {
+            const active = this.getActiveParticleCount();
+            const zoomState = window.SS_ZOOM_OPT || null;
+            const displayActive = this.getZoomDisplayParticleCount(active, zoomState);
+            const out = {
+                ...info,
+                active,
+                displayActive,
+                requested,
+                zoom: zoomState,
+                trailBudget: window.SS_TRAIL_BUDGET || null,
+                overdrawVisualBudget: window.SS_OVERDRAW_VISUAL_BUDGET || null,
+                pointsFallback: window.SS_POINTS_FALLBACK || null
             };
-            window.SS_PARTICLE_SCALE = info;
-            if (typeof window.updateAdaptiveParticleCountReadout === 'function') window.updateAdaptiveParticleCountReadout(info);
+            window.SS_PARTICLE_SCALE = out;
+            if (typeof window.updateAdaptiveParticleCountReadout === 'function') window.updateAdaptiveParticleCountReadout(out);
+            return out;
+        };
+
+        if (!enabled) {
+            this._perfParticleScale = 1;
+            this._frameParticleCountCache = null;
+            this._adaptiveCountLevel = 0;
+            this._adaptiveCountNextChangeAt = 0;
+            publishInfo({
+                enabled: false,
+                scale: 1,
+                target: 1,
+                minScale: baseMinScale,
+                safety,
+                level: 0,
+                targetLevel: 0,
+            });
             return this._perfParticleScale;
         }
+
         const fpsInfo = window.SS_FPS || {};
-        const fps = Number(fpsInfo.fps);
-        const entropy = Number.isFinite(Number(fpsInfo.entropy))
+        const rawFps = Number(fpsInfo.fps);
+        const rawEntropy = Number.isFinite(Number(fpsInfo.entropy))
             ? Math.max(0, Math.min(100, Number(fpsInfo.entropy)))
-            : (Number.isFinite(fps) ? Math.max(0, Math.min(100, (60 - fps) / 59 * 100)) : 0);
-        const hot = Math.max(0, (entropy - 18) / 72);
-        const target = Math.max(minScale, Math.min(1, 1 - Math.pow(hot, 1.35) * (1 - minScale)));
-        const current = Number.isFinite(this._perfParticleScale) ? this._perfParticleScale : 1;
-        const k = target < current ? 0.18 : 0.035;
-        this._perfParticleScale = current + (target - current) * k;
-        if (Math.abs(this._perfParticleScale - target) < 0.002) this._perfParticleScale = target;
-        const info = {
+            : (Number.isFinite(rawFps) ? Math.max(0, Math.min(100, (60 - rawFps) / 59 * 100)) : 0);
+
+        const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+        if (!Number.isFinite(this._adaptiveFpsSmoothed)) this._adaptiveFpsSmoothed = Number.isFinite(rawFps) ? rawFps : 60;
+        if (!Number.isFinite(this._adaptiveEntropySmoothed)) this._adaptiveEntropySmoothed = rawEntropy;
+        if (Number.isFinite(rawFps)) {
+            const kFps = rawFps < this._adaptiveFpsSmoothed ? 0.20 : 0.070;
+            this._adaptiveFpsSmoothed += (rawFps - this._adaptiveFpsSmoothed) * kFps;
+        }
+        const kEntropy = rawEntropy > this._adaptiveEntropySmoothed ? 0.16 : 0.060;
+        this._adaptiveEntropySmoothed += (rawEntropy - this._adaptiveEntropySmoothed) * kEntropy;
+
+        const fps = this._adaptiveFpsSmoothed;
+        const entropy = Math.max(0, Math.min(100, this._adaptiveEntropySmoothed));
+        const z = this.getZoomOptimizationState();
+        const screenHot = Math.max(0, Math.min(1, Number(z.screenPressure) || 0));
+        const zoomHot = Math.max(0, Math.min(1, Number(z.overdrawPressure) || 0));
+        const safetyLevel = Math.max(0, Math.min(3, safety.level | 0));
+        const emergency = Number.isFinite(fps) && fps < 22;
+        let pressure = 0;
+        let targetLevel = 0;
+
+        // Adaptive count targets the full requested count. It only steps below
+        // 100% after the slow safety controller confirms sustained bad FPS,
+        // or during an immediate emergency. Overdraw/zoom no longer causes a
+        // permanent sub-full adaptive count by itself.
+        if (emergency) {
+            pressure = Math.max(0.92, Math.min(1, (26 - fps) / 14));
+            targetLevel = 4;
+        } else if (safetyLevel > 0) {
+            pressure = Math.max(
+                0.34 + safetyLevel * 0.17,
+                Math.max(0, (entropy - 48) / 40),
+                screenHot * 0.14,
+                zoomHot * 0.10
+            );
+            targetLevel = Math.min(5, safetyLevel + 1);
+        }
+
+        const nowGood = (Number.isFinite(fps) ? fps >= 53 : entropy < 28) && entropy < 34;
+        if (nowGood && safetyLevel <= 0) {
+            targetLevel = 0;
+            pressure = 0;
+        }
+
+        let level = Number.isFinite(this._adaptiveCountLevel) ? this._adaptiveCountLevel : 0;
+        const nextAt = Number.isFinite(this._adaptiveCountNextChangeAt) ? this._adaptiveCountNextChangeAt : 0;
+        if (targetLevel > level && (now >= nextAt || emergency)) {
+            level = Math.min(targetLevel, level + (emergency && targetLevel - level >= 2 ? 2 : 1));
+            this._adaptiveCountNextChangeAt = now + (emergency ? 700 : 1500);
+        } else if (targetLevel < level && (now >= nextAt || (nowGood && safetyLevel <= 0))) {
+            level = Math.max(targetLevel, level - 1);
+            this._adaptiveCountNextChangeAt = now + (targetLevel === 0 ? 900 : 2200);
+        }
+        this._adaptiveCountLevel = level;
+
+        const scaleLevels = [
+            1.00,
+            Math.max(minScale, 0.92),
+            Math.max(minScale, 0.84),
+            Math.max(minScale, 0.74),
+            Math.max(minScale, 0.64),
+            minScale
+        ];
+        const target = scaleLevels[level] ?? minScale;
+        this._perfParticleScale = target;
+        this._frameParticleCountCache = null;
+
+        publishInfo({
             enabled: true,
             scale: this._perfParticleScale,
             target,
             minScale,
+            baseMinScale,
+            safety,
             entropy,
-            active: this.getActiveParticleCount(),
-            requested: this.getTargetParticleCount()
-        };
-        window.SS_PARTICLE_SCALE = info;
-        if (typeof window.updateAdaptiveParticleCountReadout === 'function') window.updateAdaptiveParticleCountReadout(info);
+            fps: Number.isFinite(fps) ? fps : null,
+            pressure,
+            screenPressure: screenHot,
+            zoomPressure: zoomHot,
+            level,
+            targetLevel,
+            source: fpsInfo.source || 'worker',
+        });
         return this._perfParticleScale;
     }
 
@@ -154,13 +309,130 @@ export class Engine {
         return clampActiveParticleCount(value, this.particleCount);
     }
 
+    getFrameParticleCounts(value = window.S?.freeEnergy, zoomState = null) {
+        const frame = Number(this._perfFrame) || 0;
+        const parsedValue = Number(value);
+        const keyValue = Number.isFinite(parsedValue) ? parsedValue : -1;
+        const scale = this.getPerformanceParticleScale ? this.getPerformanceParticleScale() : 1;
+        const cache = this._frameParticleCountCache;
+        if (cache && cache.frame === frame && cache.value === keyValue && cache.scale === scale && (!zoomState || cache.zoom === zoomState)) return cache;
+        const active = this.getActiveParticleCount(value);
+        const zoom = zoomState || window.SS_ZOOM_OPT || this.getZoomOptimizationState();
+        const display = this.getZoomDisplayParticleCount(active, zoom);
+        const out = { frame, value: keyValue, scale, zoom, active, display };
+        this._frameParticleCountCache = out;
+        return out;
+    }
+
+    getFrameActiveParticleCount(value = window.S?.freeEnergy, zoomState = null) {
+        return this.getFrameParticleCounts(value, zoomState).active;
+    }
+
+    getFrameDisplayParticleCount(value = window.S?.freeEnergy, zoomState = null) {
+        return this.getFrameParticleCounts(value, zoomState).display;
+    }
+
     _smoothstep(edge0, edge1, x) {
         const span = Math.max(1e-6, edge1 - edge0);
         const t = Math.max(0, Math.min(1, (x - edge0) / span));
         return t * t * (3 - 2 * t);
     }
 
+    getAdaptiveCullingSafetyState() {
+        const S = window.S || {};
+        const enabled = S.adaptiveCulling !== false;
+        const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+        const cached = this._adaptiveCullingSafety;
+        if (cached && (now - (cached.updatedAt || 0)) < 250) return cached;
+
+        let level = cached && Number.isFinite(cached.level) ? cached.level : 0;
+        if (!enabled) {
+            level = 0;
+            this._adaptiveCullingBadSince = 0;
+            this._adaptiveCullingGoodSince = 0;
+            this._adaptiveCullingDropScore = 0;
+            this._adaptiveCullingDropScoreAt = now;
+            this._adaptiveCullingNextChangeAt = now + 500;
+            const state = { enabled: false, level: 0, fps: null, entropy: 0, rawFps: null, frameMs: null, dt: null, dropScore: 0, badForMs: 0, goodForMs: 0, updatedAt: now };
+            this._adaptiveCullingSafety = state;
+            window.SS_ADAPTIVE_CULLING = state;
+            return state;
+        }
+
+        const fpsInfo = window.SS_FPS || {};
+        const rawFps = Number(fpsInfo.fps);
+        const rawEntropy = Number.isFinite(Number(fpsInfo.entropy)) ? Math.max(0, Math.min(100, Number(fpsInfo.entropy))) : 0;
+        const rawFrameMs = Number(fpsInfo.frameMs);
+        const rawDtMs = Number(fpsInfo.dt);
+        if (!Number.isFinite(this._adaptiveCullingFpsSmoothed)) this._adaptiveCullingFpsSmoothed = Number.isFinite(rawFps) ? rawFps : 60;
+        if (!Number.isFinite(this._adaptiveCullingEntropySmoothed)) this._adaptiveCullingEntropySmoothed = rawEntropy;
+        if (Number.isFinite(rawFps)) {
+            const kFps = rawFps < this._adaptiveCullingFpsSmoothed ? 0.22 : 0.050;
+            this._adaptiveCullingFpsSmoothed += (rawFps - this._adaptiveCullingFpsSmoothed) * kFps;
+        }
+        const kEntropy = rawEntropy > this._adaptiveCullingEntropySmoothed ? 0.18 : 0.045;
+        this._adaptiveCullingEntropySmoothed += (rawEntropy - this._adaptiveCullingEntropySmoothed) * kEntropy;
+
+        const fps = this._adaptiveCullingFpsSmoothed;
+        const entropy = Math.max(0, Math.min(100, this._adaptiveCullingEntropySmoothed));
+
+        // Dropped frames usually show up as frame-time spikes before the
+        // smoothed FPS drops below 30. Keep a small burst score so Auto Culling
+        // can trim visible work/trail cadence quickly, then decay it back out.
+        const spikeMs = Math.max(
+            Number.isFinite(rawFrameMs) ? rawFrameMs : 0,
+            Number.isFinite(rawDtMs) ? rawDtMs : 0
+        );
+        const lastSpikeAt = Number.isFinite(this._adaptiveCullingDropScoreAt) ? this._adaptiveCullingDropScoreAt : now;
+        const decay = Math.pow(0.58, Math.max(0, now - lastSpikeAt) / 1000);
+        let dropScore = Math.max(0, Math.min(12, (Number(this._adaptiveCullingDropScore) || 0) * decay));
+        if (spikeMs > 24) dropScore += Math.min(5.5, (spikeMs - 24) / 12);
+        if (Number.isFinite(rawFps) && rawFps < 48) dropScore += Math.min(2.8, (48 - rawFps) / 18);
+        if (rawEntropy > 42) dropScore += Math.min(2.5, (rawEntropy - 42) / 28);
+        dropScore = Math.max(0, Math.min(14, dropScore));
+        this._adaptiveCullingDropScore = dropScore;
+        this._adaptiveCullingDropScoreAt = now;
+
+        const bad = (Number.isFinite(fps) && fps < 36) || entropy > 54 || dropScore > 2.4;
+        const veryBad = (Number.isFinite(fps) && fps < 25) || entropy > 76 || dropScore > 6.2 || spikeMs > 58;
+        const good = (Number.isFinite(fps) && fps > 53) && entropy < 30 && dropScore < 1.2;
+        if (bad) {
+            if (!this._adaptiveCullingBadSince) this._adaptiveCullingBadSince = now;
+            this._adaptiveCullingGoodSince = 0;
+        } else if (good) {
+            if (!this._adaptiveCullingGoodSince) this._adaptiveCullingGoodSince = now;
+            this._adaptiveCullingBadSince = 0;
+        } else {
+            this._adaptiveCullingBadSince = 0;
+            this._adaptiveCullingGoodSince = 0;
+        }
+        const badForMs = this._adaptiveCullingBadSince ? now - this._adaptiveCullingBadSince : 0;
+        const goodForMs = this._adaptiveCullingGoodSince ? now - this._adaptiveCullingGoodSince : 0;
+        const nextAt = Number.isFinite(this._adaptiveCullingNextChangeAt) ? this._adaptiveCullingNextChangeAt : 0;
+        if (bad && now >= nextAt) {
+            const target =
+                (veryBad && (badForMs > 650 || dropScore > 8.5)) ? 3 :
+                (badForMs > 1800 || dropScore > 5.0) ? 2 :
+                (badForMs > 420 || dropScore > 2.4) ? 1 : 0;
+            if (target > level) {
+                level = Math.min(target, level + 1);
+                this._adaptiveCullingNextChangeAt = now + (veryBad ? 700 : 1050);
+                this._forcePixelRatioApply = true;
+            }
+        } else if (good && goodForMs > 2600 && now >= nextAt && level > 0) {
+            level = Math.max(0, level - 1);
+            this._adaptiveCullingNextChangeAt = now + 2200;
+            this._forcePixelRatioApply = true;
+        }
+        const state = { enabled: true, level, fps: Number.isFinite(fps) ? fps : null, entropy, rawFps: Number.isFinite(rawFps) ? rawFps : null, frameMs: Number.isFinite(rawFrameMs) ? rawFrameMs : null, dt: Number.isFinite(rawDtMs) ? rawDtMs : null, dropScore, badForMs, goodForMs, updatedAt: now };
+        this._adaptiveCullingSafety = state;
+        window.SS_ADAPTIVE_CULLING = state;
+        return state;
+    }
+
     getZoomOptimizationState() {
+        const frame = Number(this._perfFrame) || 0;
+        if (frame > 0 && this._zoomOptFrame === frame && this._zoomOptCache) return this._zoomOptCache;
         const S = window.S || {};
         const enabled = S.zoomRenderOptimize !== false;
         const dist = Number(this.cam && this.cam.dist);
@@ -168,6 +440,10 @@ export class Engine {
         const near = Math.max(1, Number(S.zoomNearDistance) || 18);
         const far = Math.max(near + 1, Number(S.zoomFarDistance) || 75);
         const close = enabled ? (1 - this._smoothstep(near, far, camDist)) : 0;
+        // Extra visible-instance trim once the camera is inside ~50 units. At
+        // that range we only see a thin slice of the body, so drawing the full
+        // requested count is wasted even when compute count still targets full.
+        const closeUnder50 = enabled ? (1 - this._smoothstep(28, 50, camDist)) : 0;
         const activeMin = Math.max(0.05, Math.min(1, Number(S.zoomActiveScaleMin) || 0.33));
         const pixelMin = Math.max(0.35, Math.min(1, Number(S.zoomPixelRatioScaleMin) || 0.78));
         const effectMin = Math.max(0.2, Math.min(1, Number(S.zoomEffectScaleMin) || 0.52));
@@ -175,8 +451,16 @@ export class Engine {
         const basePixelRatioScale = 1 - close * (1 - pixelMin);
         const baseEffectScale = 1 - close * (1 - effectMin);
 
-        const overdrawEnabled = enabled && S.zoomOverdrawOptimize !== false;
+        const safety = this.getAdaptiveCullingSafetyState();
+        const cullingEnabled = S.adaptiveCulling !== false;
+        const safetyLevel = Math.max(0, Math.min(3, safety.level | 0));
+        const safetyActiveNow = cullingEnabled && safetyLevel > 0;
+        const overdrawEnabled = enabled && safetyActiveNow;
         const targetCount = this.getTargetParticleCount ? this.getTargetParticleCount(S.freeEnergy) : (Number(S.freeEnergy) || 0);
+        // Keep overdraw estimation tied to the requested scene, not the
+        // current adaptive-trimmed count. Otherwise the two control loops
+        // chase each other and FPS oscillates around dense scenes.
+        const activeForLoad = targetCount;
         const pointSize = Math.max(0.02, Math.min(24, Number((window.S_effective || S).resolution ?? S.resolution ?? 0.1) || 0.1));
         const amount = Math.max(0, Math.min(3, Number(S.visualEffectAmount ?? 0.75) || 0.75));
         const dynamics = Math.max(0.25, Math.min(2.5, Number(S.visualEffectDynamics ?? 1.15) || 1.15));
@@ -188,40 +472,420 @@ export class Engine {
             (S.showRibbons ? 0.22 : 0) +
             (S.tessRibbons ? 0.26 : 0) +
             (Number(S.bgGlow) > 0.18 ? 0.08 : 0);
-        const particleLoad = Math.max(0, Math.min(1, targetCount / 180000));
+        const particleLoad = Math.max(0, Math.min(1, activeForLoad / 180000));
         const sizeLoad = Math.max(0, Math.min(1, (pointSize - 0.35) / 5.65));
         const fxLoad = Math.max(0, Math.min(1.35, layerLoad + amount * 0.12 + dynamics * 0.08 + particleLoad * 0.20 + sizeLoad * 0.22));
-        const overdrawPressure = overdrawEnabled ? Math.max(0, Math.min(1, close * (0.18 + fxLoad * 0.55))) : 0;
+        const screenOverdraw = overdrawEnabled
+            ? this.getScreenOverdrawState({ activeCount: activeForLoad, pointSize, layerLoad, amount, dynamics })
+            : { area: 0, activeCount: activeForLoad, pointSize, fillEstimate: 0, targetLevel: 0, level: 0, pressure: 0, particleFill: 0, ribbonFill: 0, fxFill: 0, fullScreenFill: 0 };
+        const screenPressure = overdrawEnabled ? Math.max(0, Math.min(1, screenOverdraw.pressure || 0)) : 0;
+        const zoomPressure = overdrawEnabled ? Math.max(0, Math.min(1, close * (0.18 + fxLoad * 0.55))) : 0;
+        const overdrawPressure = Math.max(zoomPressure, screenPressure);
         const overdrawActiveMin = Math.max(0.05, Math.min(activeMin, Number(S.zoomOverdrawActiveScaleMin) || 0.30));
         const overdrawPixelMin = Math.max(0.35, Math.min(pixelMin, Number(S.zoomOverdrawPixelRatioScaleMin) || 0.76));
         const overdrawEffectMin = Math.max(0.15, Math.min(effectMin, Number(S.zoomOverdrawEffectScaleMin) || 0.55));
         const lineMin = Math.max(0.02, Math.min(1, Number(S.zoomOverdrawLineScaleMin) || 0.14));
-        const activeScale = Math.max(overdrawActiveMin, baseActiveScale * (1 - overdrawPressure * 0.30));
-        const pixelRatioScale = Math.max(overdrawPixelMin, basePixelRatioScale * (1 - overdrawPressure * 0.14));
-        const effectScale = Math.max(overdrawEffectMin, baseEffectScale * (1 - overdrawPressure * 0.22));
-        const lineScale = Math.max(lineMin, activeScale * (1 - close * 0.28) * (1 - overdrawPressure * 0.34));
+        const safetyActive = [1.00, 0.92, 0.84, 0.76][safetyLevel] || 1;
+        const safetyPixel = [1.00, 0.96, 0.91, 0.86][safetyLevel] || 1;
+        const safetyEffect = [1.00, 0.90, 0.80, 0.70][safetyLevel] || 1;
+        const safetyLine = [1.00, 0.86, 0.72, 0.58][safetyLevel] || 1;
+        // Adaptive Count should target the full requested compute count unless
+        // FPS is genuinely bad, but close-view visible culling is still useful:
+        // when the camera is zoomed into a sliver of the particle body, drawing
+        // the full instance set is wasted. So activeScale always gets the
+        // zoom-visible trim, while pixel/FX/line quality only tighten under the
+        // slow sustained-FPS safety controller.
+        const deepZoomActiveMin = Math.max(0.12, Math.min(activeMin, activeMin * 0.62));
+        const visibleZoomScale = Math.max(deepZoomActiveMin, baseActiveScale * (1 - closeUnder50 * 0.42));
+        const activeScale = safetyActiveNow
+            ? Math.max(overdrawActiveMin, visibleZoomScale * (1 - zoomPressure * 0.22) * (1 - screenPressure * 0.30) * safetyActive)
+            : visibleZoomScale;
+        const pixelRatioScale = safetyActiveNow
+            ? Math.max(overdrawPixelMin, basePixelRatioScale * (1 - zoomPressure * 0.10) * (1 - screenPressure * 0.12) * safetyPixel)
+            : 1.0;
+        const effectScale = safetyActiveNow
+            ? Math.max(overdrawEffectMin, baseEffectScale * (1 - zoomPressure * 0.16) * (1 - screenPressure * 0.16) * safetyEffect)
+            : 1.0;
+        const lineScale = safetyActiveNow
+            ? Math.max(lineMin, activeScale * (1 - close * 0.24) * (1 - overdrawPressure * 0.34) * safetyLine)
+            : activeScale;
         const syncEveryMax = Math.max(1, Math.min(8, Math.round(Number(S.zoomCompatSyncMaxEvery) || 2)));
         const compatSyncEvery = Math.max(1, Math.round(1 + close * (syncEveryMax - 1) + overdrawPressure * 2));
-        const state = { enabled, dist: camDist, close, activeScale, pixelRatioScale, effectScale, lineScale, overdrawPressure, fxLoad, compatSyncEvery };
+        const state = { enabled, adaptiveCulling: cullingEnabled, safety, safetyActive: safetyActiveNow, dist: camDist, close, closeUnder50, activeScale, pixelRatioScale, effectScale, lineScale, overdrawPressure, zoomPressure, screenPressure, fxLoad, compatSyncEvery, screenOverdraw };
+        this._zoomOptFrame = frame;
+        this._zoomOptCache = state;
         window.SS_ZOOM_OPT = state;
         return state;
     }
 
-    getZoomDisplayParticleCount(base = this.getActiveParticleCount(window.S?.freeEnergy)) {
+    getZoomDisplayParticleCount(base = this.getActiveParticleCount(window.S?.freeEnergy), zOverride = null) {
         const n = Math.max(0, Math.floor(Number(base) || 0));
         if (n <= 0) return 0;
-        const z = this.getZoomOptimizationState();
+        // Fixed Count means fixed visible/compute count. Keep the overdraw
+        // shader pressure controls (size/opacity/pixel ratio), but do not cut
+        // the instance count behind the user's back.
+        if (window.S?.perfParticleScaling !== true) return n;
+        const z = zOverride || this.getZoomOptimizationState();
         const floor = (z.overdrawPressure || 0) > 0.75 ? 4000 : 8000;
-        const minVisible = Math.min(n, Math.max(floor, Math.floor(n * z.activeScale)));
-        return Math.max(1, minVisible);
+        const rawVisible = Math.min(n, Math.max(floor, Math.floor(n * z.activeScale)));
+        const q = Math.max(256, Math.min(65536, Math.round(Number(window.S?.zoomDisplayParticleChunk) || Number(window.S?.perfParticleCountChunk) || 4096)));
+        if (rawVisible >= n || rawVisible <= q) return Math.max(1, rawVisible);
+        return Math.max(1, Math.min(n, Math.floor(rawVisible / q) * q));
+    }
+
+    getScreenOverdrawState(options = {}) {
+        const S = window.S || {};
+        const area = Math.max(
+            1,
+            Math.floor(
+                (Number(options.width) || Number(window.SS_OFFSCREEN_SIZE?.width) || Number(this.canvas?.clientWidth) || Number(window.innerWidth) || 1) *
+                (Number(options.height) || Number(window.SS_OFFSCREEN_SIZE?.height) || Number(this.canvas?.clientHeight) || Number(window.innerHeight) || 1)
+            )
+        );
+        const activeCount = Math.max(0, Math.floor(Number(options.activeCount) || 0));
+        const pointSize = Math.max(0.02, Math.min(24, Number(options.pointSize) || 0.1));
+        const layerLoad = Math.max(0, Math.min(2, Number(options.layerLoad) || 0));
+        const amount = Math.max(0, Math.min(3, Number(options.amount) || 0));
+        const dynamics = Math.max(0.25, Math.min(2.5, Number(options.dynamics) || 1));
+        const trailDepth = Math.max(1, Math.min(32, Number(window.SS_PERF?.nativeTrailDepth) || 8));
+        const ribbonsOn = !!(S.showRibbons || S.tessRibbons || S.visualEffectGeometry === true || S.compatAllowManualStructure === true);
+        const pointDrawMode = String(S.perfParticleDrawMode || 'native').toLowerCase();
+        const pointsMode = pointDrawMode === 'points';
+        const bgGlow = Math.max(0, Math.min(1, Number(S.bgGlow) / 0.8 || 0));
+        const bgBlur = Math.max(0, Math.min(1, Number(S.bgBlur) / 300 || 0));
+        const backdropMix = Math.max(0, Math.min(1.5, Number(S.visualEffect2DBackdropMix ?? 1.0) || 0));
+        const fxFade = Math.max(0, Math.min(1, Number(S.visualEffect2DFade ?? 0.01) / 0.16 || 0));
+        const lightLoad = Math.max(0, Math.min(1, Number((window.S_effective || S).lightness ?? S.lightness ?? 0.9) || 0));
+
+        const spriteArea = Math.max(0.35, Math.pow(pointSize * (pointsMode ? 0.92 : 1.0), 2));
+        const particleFill = Math.max(0, Math.min(1.8, activeCount * spriteArea * 0.20 / area));
+        const ribbonFill = ribbonsOn ? Math.max(0, Math.min(1.6, activeCount * Math.max(2, trailDepth) * 0.010 / area)) : 0;
+        const fxFill = Math.max(0, Math.min(0.55, layerLoad * 0.085 + amount * 0.030 + dynamics * 0.018));
+        const hasBackdrop = S.visualEffectBackdrop !== false && S.visualEffect2DBackdrop !== false;
+        const fullScreenFill = Math.max(0, Math.min(0.70,
+            bgGlow * 0.15 + bgBlur * 0.055 + backdropMix * fxFade * 0.16 + lightLoad * 0.025 +
+            (hasBackdrop && fxFade > 0.02 ? 0.025 : 0)
+        ));
+        const fillEstimate = Math.max(0, Math.min(2.4, particleFill + ribbonFill + fxFill + fullScreenFill));
+        const thresholds = [0.22, 0.38, 0.58, 0.82, 1.10];
+        let targetLevel = 0;
+        for (let i = 0; i < thresholds.length; i++) {
+            if (fillEstimate >= thresholds[i]) targetLevel = i + 1;
+        }
+
+        const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+        let level = Number.isFinite(this._screenOverdrawLevel) ? this._screenOverdrawLevel : 0;
+        const nextAt = Number.isFinite(this._screenOverdrawNextChangeAt) ? this._screenOverdrawNextChangeAt : 0;
+        if (targetLevel > level && now >= nextAt) {
+            level = Math.min(targetLevel, level + 1);
+            this._screenOverdrawNextChangeAt = now + 900;
+        } else if (targetLevel < level && now >= nextAt) {
+            level = Math.max(targetLevel, level - 1);
+            this._screenOverdrawNextChangeAt = now + 1800;
+        }
+        this._screenOverdrawLevel = level;
+
+        const pressureLevels = [0.00, 0.12, 0.24, 0.40, 0.58, 0.75];
+        return {
+            area,
+            activeCount,
+            pointSize,
+            fillEstimate,
+            targetLevel,
+            level,
+            pressure: pressureLevels[level] ?? pressureLevels[pressureLevels.length - 1],
+            particleFill,
+            ribbonFill,
+            fxFill,
+            fullScreenFill,
+        };
+    }
+
+    getOverdrawVisualBudgetState(lineZoom = this.getZoomOptimizationState()) {
+        const S = window.S || {};
+        const safety = this.getAdaptiveCullingSafetyState();
+        const enabled = S.adaptiveCulling !== false && S.zoomRenderOptimize !== false && (safety.level | 0) > 0;
+        const safetyPressureFloor = [0, 0.18, 0.34, 0.52][Math.max(0, Math.min(3, safety.level | 0))] || 0;
+        const pressure = enabled
+            ? Math.max(0, Math.min(1, Math.max(
+                Number(lineZoom.overdrawPressure) || 0,
+                Number(lineZoom.screenPressure) || 0,
+                safetyPressureFloor
+            )))
+            : 0;
+        const thresholds = [0.12, 0.24, 0.40, 0.58, 0.76];
+        let targetLevel = 0;
+        for (let i = 0; i < thresholds.length; i++) {
+            if (pressure >= thresholds[i]) targetLevel = i + 1;
+        }
+
+        const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+        let level = Number.isFinite(this._overdrawVisualLevel) ? this._overdrawVisualLevel : 0;
+        const nextAt = Number.isFinite(this._overdrawVisualNextChangeAt) ? this._overdrawVisualNextChangeAt : 0;
+        if (!enabled) {
+            level = 0;
+            this._overdrawVisualNextChangeAt = now + 250;
+        } else if (targetLevel > level && now >= nextAt) {
+            level = Math.min(targetLevel, level + 1);
+            this._overdrawVisualNextChangeAt = now + 750;
+        } else if (targetLevel < level && now >= nextAt) {
+            level = Math.max(targetLevel, level - 1);
+            this._overdrawVisualNextChangeAt = now + 1800;
+        }
+        this._overdrawVisualLevel = level;
+
+        const pointScaleFloor = Math.max(0.30, Math.min(1, Number(S.overdrawParticleScaleMin ?? 0.48) || 0.48));
+        const opacityScaleFloor = Math.max(0.38, Math.min(1, Number(S.overdrawOpacityScaleMin ?? 0.62) || 0.62));
+        const sizeBases = [1.00, 0.88, 0.76, 0.64, 0.54, 0.46];
+        const opacityBases = [1.00, 0.92, 0.84, 0.76, 0.68, 0.60];
+        const particleScale = Math.max(pointScaleFloor, sizeBases[level] ?? sizeBases[sizeBases.length - 1]);
+        const opacityScale = Math.max(opacityScaleFloor, opacityBases[level] ?? opacityBases[opacityBases.length - 1]);
+        const state = { enabled, pressure, level, targetLevel, particleScale, opacityScale, safety };
+        window.SS_OVERDRAW_VISUAL_BUDGET = state;
+        return state;
+    }
+
+    getTrailBudgetState(lineZoom = this.getZoomOptimizationState(), manualTrails = false) {
+        const S = window.S || {};
+        const safety = this.getAdaptiveCullingSafetyState();
+        // Trail count culling is a close-view/zoom optimization, not only a
+        // panic-mode quality cut. If Auto Culling is on, trim trail draw count
+        // when zoomed into a sliver even while FPS is healthy; sustained bad FPS
+        // can still push it harder below.
+        const enabled = S.adaptiveCulling !== false && S.zoomRenderOptimize !== false;
+        const safetyLevel = Math.max(0, Math.min(3, safety.level | 0));
+        const safetyActive = safetyLevel > 0;
+        const dist = Math.max(0.001, Number(lineZoom.dist) || DEFAULT_ORBIT_DIST);
+        const bandRise = this._smoothstep(46, 58, dist);
+        const bandFall = 1 - this._smoothstep(96, 116, dist);
+        const midBand = enabled ? Math.max(0, Math.min(1, bandRise * bandFall)) : 0;
+        const bandStrength = Math.max(0, Math.min(1, Number(S.zoomTrailMidBandStrength) || 0.82));
+        const under50Pressure = Math.max(0, Math.min(1, Number(lineZoom.closeUnder50) || 0));
+        const zoomPressure = enabled
+            ? Math.max(
+                Number(lineZoom.overdrawPressure) || 0,
+                Number(lineZoom.screenPressure) || 0,
+                (Number(lineZoom.close) || 0) * 0.78,
+                under50Pressure * 0.96,
+                midBand * bandStrength
+            )
+            : 0;
+        const fpsInfo = window.SS_FPS || {};
+        const entropy = Number.isFinite(Number(fpsInfo.entropy)) ? Math.max(0, Math.min(100, Number(fpsInfo.entropy))) : 0;
+        const fpsPressure = enabled ? Math.max(0, Math.min(1, (entropy - 26) / 54)) : 0;
+        const pressure = Math.max(0, Math.min(1, Math.max(zoomPressure, fpsPressure * 0.92)));
+        const thresholds = [0.18, 0.34, 0.52, 0.68, 0.84];
+        let targetLevel = 0;
+        for (let i = 0; i < thresholds.length; i++) {
+            if (pressure >= thresholds[i]) targetLevel = i + 1;
+        }
+        if (enabled && safetyActive) targetLevel = Math.max(targetLevel, Math.min(5, safetyLevel + 1));
+
+        const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+        let level = Number.isFinite(this._trailBudgetLevel) ? this._trailBudgetLevel : 0;
+        const nextAt = Number.isFinite(this._trailBudgetNextChangeAt) ? this._trailBudgetNextChangeAt : 0;
+        if (!enabled) {
+            level = 0;
+            this._trailBudgetLevel = 0;
+            this._trailBudgetNextChangeAt = now + 250;
+        } else if (targetLevel > level && now >= nextAt) {
+            level = Math.min(targetLevel, level + 1);
+            this._trailBudgetNextChangeAt = now + 700;
+        } else if (targetLevel < level && now >= nextAt) {
+            level = Math.max(targetLevel, level - 1);
+            this._trailBudgetNextChangeAt = now + 1800;
+        }
+        this._trailBudgetLevel = level;
+
+        const manualScales = [1.00, 0.82, 0.66, 0.52, 0.40, 0.30];
+        const fxScales =     [1.00, 0.72, 0.54, 0.38, 0.26, 0.18];
+        const manualEveryBoost = [0, 0, 0, 0, 0, 0];
+        const fxEveryBoost =     [0, 1, 2, 4, 6, 8];
+        const alphaScale =       [1.00, 0.96, 0.90, 0.84, 0.78, 0.72];
+        const scales = manualTrails ? manualScales : fxScales;
+        const everyBoost = manualTrails ? manualEveryBoost : fxEveryBoost;
+        const state = {
+            enabled,
+            dist,
+            midBand,
+            under50Pressure,
+            entropy,
+            pressure,
+            targetLevel,
+            level,
+            visibleScale: scales[level] ?? scales[scales.length - 1],
+            everyBoost: everyBoost[level] ?? everyBoost[everyBoost.length - 1],
+            alphaScale: alphaScale[level] ?? alphaScale[alphaScale.length - 1],
+            safety,
+            safetyActive,
+            chunk: Math.max(128, Math.min(16384, Math.round(Number(S.zoomTrailParticleChunk) || 2048)))
+        };
+        window.SS_TRAIL_BUDGET = state;
+        return state;
+    }
+
+    getTrailDisplayParticleCount(maxCount, visibleScale, chunk = 2048) {
+        const maxN = Math.max(0, Math.floor(Number(maxCount) || 0));
+        if (maxN <= 2) return maxN;
+        const scale = Math.max(0.01, Math.min(1, Number(visibleScale) || 1));
+        const raw = Math.max(2, Math.min(maxN, Math.floor(maxN * scale)));
+        const q = Math.max(128, Math.min(16384, Math.round(Number(chunk) || 2048)));
+        if (raw <= q) return raw;
+        return Math.max(2, Math.min(maxN, Math.floor(raw / q) * q));
+    }
+
+
+    async warmCompileTrailPipelines() {
+        if (this._trailPipelinesWarmed || !this.renderer) return;
+        this._trailPipelinesWarmed = true;
+        const meshes = [this.ribbonMesh, this.latticeMesh].filter(Boolean);
+        const savedMeshes = meshes.map(mesh => ({
+            mesh,
+            visible: mesh.visible,
+            count: Number(mesh.count) || 0,
+            opacity: mesh.material ? mesh.material.opacity : undefined,
+            transparent: mesh.material ? mesh.material.transparent : undefined,
+        }));
+        const savedActive = this.uniforms?.activeParticleCount ? this.uniforms.activeParticleCount.value : undefined;
+        try {
+            const active = Math.max(2, Math.min(
+                this.getActiveParticleCount(window.S?.freeEnergy),
+                Math.max(2, Math.min(this._ribbonN || 2, this._latticeN || 2))
+            ));
+            if (this.uniforms?.activeParticleCount) this.uniforms.activeParticleCount.value = active;
+            // Compile the compute kernels while the splash / first-frame settle
+            // is still hiding startup work. First visible trail toggle should
+            // only change uniforms/counts, not build TSL/WebGPU pipelines.
+            if (this.computeLatticeNode && typeof this.renderer.computeAsync === 'function') {
+                await this.renderer.computeAsync(this.computeLatticeNode);
+            }
+            if (this.computeRibbonNode && typeof this.renderer.computeAsync === 'function') {
+                await this.renderer.computeAsync(this.computeRibbonNode);
+            }
+            for (const mesh of meshes) {
+                mesh.visible = true;
+                mesh.count = Math.max(1, Math.min(2, Number(mesh.count) || 2));
+                if (mesh.material) {
+                    mesh.material.transparent = true;
+                    mesh.material.opacity = 0.0001;
+                }
+            }
+            if (meshes.length && typeof this.renderer.render === 'function') {
+                this._updateCamera?.();
+                await this.renderer.render(this.scene, this.camera);
+            }
+        } catch (e) {
+            console.warn('[trails] warm compile skipped:', e && e.message ? e.message : e);
+        } finally {
+            if (this.uniforms?.activeParticleCount && savedActive !== undefined) this.uniforms.activeParticleCount.value = savedActive;
+            for (const rec of savedMeshes) {
+                rec.mesh.visible = rec.visible;
+                rec.mesh.count = rec.count;
+                if (rec.mesh.material) {
+                    if (rec.opacity !== undefined) rec.mesh.material.opacity = rec.opacity;
+                    if (rec.transparent !== undefined) rec.mesh.material.transparent = rec.transparent;
+                }
+            }
+        }
+    }
+
+
+    getTrailAnimationThrottleState(manualTrails = false) {
+        const S = window.S || {};
+        const validModes = new Set(['auto', 'smooth', 'held12', 'held4']);
+        let mode = String(S.trailAnimationMode || '').toLowerCase();
+        if (!validModes.has(mode)) {
+            if (S.trailAnimationThrottle === true) {
+                mode = (Number(S.trailAnimationFps) || 12) <= 6 ? 'held4' : 'held12';
+            } else {
+                mode = 'smooth';
+            }
+        }
+
+        const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+        let targetLevel = 0;
+        let pressure = 0;
+        const fpsInfo = window.SS_FPS || {};
+        const fps = Number(fpsInfo.fps);
+        const entropy = Number.isFinite(Number(fpsInfo.entropy)) ? Math.max(0, Math.min(100, Number(fpsInfo.entropy))) : 0;
+        const zoom = window.SS_ZOOM_OPT || {};
+        const screenPressure = Math.max(0, Math.min(1, Number(zoom.screenPressure ?? zoom.screenOverdraw?.pressure) || 0));
+        const close = Math.max(0, Math.min(1, Number(zoom.close) || 0));
+        const adaptiveCullingOn = S.adaptiveCulling !== false && S.zoomRenderOptimize !== false;
+        if (mode === 'auto' && manualTrails === true) {
+            const fpsPressure = Number.isFinite(fps) ? Math.max(0, Math.min(1, (52 - fps) / 28)) : 0;
+            // Close-view trail throttling is separate from quality panic. When
+            // the camera is inside a sliver of the body, full-speed trail
+            // compute is mostly wasted, so Auto moves trails to the 12 FPS
+            // hand-animated cadence even if global FPS is still okay.
+            const closePressure = adaptiveCullingOn ? Math.max(0, Math.min(1, (close - 0.34) / 0.46)) : 0;
+            const under50Pressure = adaptiveCullingOn ? Math.max(0, Math.min(1, Number(zoom.closeUnder50) || 0)) : 0;
+            pressure = Math.max(fpsPressure, Math.max(0, (entropy - 18) / 58), screenPressure * 0.30, closePressure * 0.72, under50Pressure * 0.74);
+            if ((Number.isFinite(fps) && fps < 25) || entropy > 58) targetLevel = 2;
+            else if ((Number.isFinite(fps) && fps < 46) || entropy > 30 || closePressure > 0.18 || under50Pressure > 0.12) targetLevel = 1;
+        }
+
+        let level = Number.isFinite(this._trailAnimationAutoLevel) ? this._trailAnimationAutoLevel : 0;
+        const nextAt = Number.isFinite(this._trailAnimationAutoNextAt) ? this._trailAnimationAutoNextAt : 0;
+        if (mode !== 'auto' || manualTrails !== true) {
+            level = 0;
+            this._trailAnimationAutoNextAt = now + 250;
+        } else if (targetLevel > level && now >= nextAt) {
+            level = Math.min(targetLevel, level + 1);
+            this._trailAnimationAutoNextAt = now + 260;
+        } else if (targetLevel < level && now >= nextAt) {
+            level = Math.max(targetLevel, level - 1);
+            this._trailAnimationAutoNextAt = now + 1800;
+        }
+        this._trailAnimationAutoLevel = level;
+
+        const effectiveMode = mode === 'auto'
+            ? (level >= 2 ? 'held4' : level >= 1 ? 'held12' : 'smooth')
+            : mode;
+        const effectiveFps = effectiveMode === 'held4' ? 4 : effectiveMode === 'held12' ? 12 : Math.max(1, Math.min(60, Number(S.trailAnimationFps) || 12));
+        const enabled = manualTrails === true && (effectiveMode === 'held12' || effectiveMode === 'held4');
+        const intervalMs = enabled ? (1000 / effectiveFps) : 0;
+        const state = {
+            enabled,
+            mode,
+            effectiveMode,
+            auto: mode === 'auto',
+            fps: effectiveFps,
+            intervalMs,
+            level,
+            targetLevel,
+            pressure,
+            close,
+            closeUnder50: Math.max(0, Math.min(1, Number(zoom.closeUnder50) || 0)),
+            adaptiveCulling: adaptiveCullingOn,
+            source: fpsInfo.source || 'worker'
+        };
+        window.SS_TRAIL_ANIMATION_THROTTLE = state;
+        return state;
+    }
+
+    shouldRunTrailAnimationTick(slot = 'trail', throttle = null, force = false) {
+        const t = throttle || this.getTrailAnimationThrottleState(true);
+        if (!t || t.enabled !== true) return true;
+        if (!this._trailAnimationThrottleLast) this._trailAnimationThrottleLast = Object.create(null);
+        const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+        const interval = Math.max(16, Number(t.intervalMs) || 0);
+        const last = Number(this._trailAnimationThrottleLast[slot]) || -1e9;
+        if (force || now - last >= interval * 0.98) {
+            this._trailAnimationThrottleLast[slot] = now;
+            return true;
+        }
+        return false;
     }
 
     applyPerfLimits() {
+        this.updatePointDrawState();
         this.updatePerformanceParticleScale();
+        const counts = this.getFrameParticleCounts(window.S?.freeEnergy);
         if (this.uniforms && this.uniforms.activeParticleCount) {
-            this.uniforms.activeParticleCount.value = this.getActiveParticleCount();
+            this.uniforms.activeParticleCount.value = counts.display;
         }
-        if (this.mesh) this.mesh.count = this.getZoomDisplayParticleCount(this.getActiveParticleCount());
+        if (this.mesh) this.mesh.count = counts.display;
         this.applyPixelRatioIfNeeded(true);
     }
 
@@ -253,31 +917,168 @@ export class Engine {
     }
 
     updateNavigationArrow() {
-        if (!this.camera) return;
-        const origin = new THREE.Vector3(0, 0, 0);
-        const projected = origin.clone().project(this.camera);
+        if (!this.camera || !this.navArrow) return;
+        const projected = this._navProjected || (this._navProjected = new THREE.Vector3());
+        projected.set(0, 0, 0).project(this.camera);
 
         const isOffScreen = Math.abs(projected.x) > 0.95 || Math.abs(projected.y) > 0.95 || projected.z > 1;
 
         if (isOffScreen) {
-            // Pointing UPWARD at origin when off-screen. The arrow rotates
-            // toward the projected location. Note: rotation is set every
-            // frame the arrow is visible — independent of the opacity
-            // transition, which handles the fade in/out.
-            const dx = projected.x;
-            const dy = projected.y;
-            const angle = Math.atan2(dy, dx) + Math.PI / 2;
-            this.navArrow.style.transform = `translateX(-50%) rotate(${angle}rad)`;
-            // Opacity: 1 for "behind camera" (z>1, harder to find),
-            // 0.55 for "off-edge but in front." Read as urgency
-            // gradient — but always white, never red.
-            this.navArrow.style.opacity = projected.z > 1 ? '0.9' : '0.55';
-        } else {
-            // Fade out rather than display:none — the CSS transition on
-            // opacity handles the smooth disappearance over 350ms.
+            const angle = Math.atan2(projected.y, projected.x) + Math.PI / 2;
+            const opacity = projected.z > 1 ? '0.9' : '0.55';
+            if (!Number.isFinite(this._navLastAngle) || Math.abs(angle - this._navLastAngle) > 0.002) {
+                this._navLastAngle = angle;
+                this.navArrow.style.transform = `translateX(-50%) rotate(${angle}rad)`;
+            }
+            if (this._navLastOpacity !== opacity) {
+                this._navLastOpacity = opacity;
+                this.navArrow.style.opacity = opacity;
+            }
+        } else if (this._navLastOpacity !== '0') {
+            this._navLastOpacity = '0';
             this.navArrow.style.opacity = '0';
         }
     }
+
+
+    _offscreenCssSize() {
+        const offscreenSize = window.SS_OFFSCREEN_SIZE || null;
+        if (!offscreenSize) return null;
+        const width = Math.max(1, Math.floor(Number(offscreenSize.cssWidth ?? offscreenSize.width) || Number(window.innerWidth) || 1));
+        const height = Math.max(1, Math.floor(Number(offscreenSize.cssHeight ?? offscreenSize.height) || Number(window.innerHeight) || 1));
+        return { width, height };
+    }
+
+    _offscreenBackingSize() {
+        const offscreenSize = window.SS_OFFSCREEN_SIZE || null;
+        if (!offscreenSize) return null;
+        const css = this._offscreenCssSize ? this._offscreenCssSize() : { width: 1, height: 1 };
+        const backingWidth = Math.max(1, Math.floor(Number(offscreenSize.backingWidth) || Number(this.canvas?.width) || css.width));
+        const backingHeight = Math.max(1, Math.floor(Number(offscreenSize.backingHeight) || Number(this.canvas?.height) || css.height));
+        return { width: backingWidth, height: backingHeight };
+    }
+
+    _syncOffscreenViewport(force = false) {
+        const css = this._offscreenCssSize ? this._offscreenCssSize() : null;
+        const backing = this._offscreenBackingSize ? this._offscreenBackingSize() : css;
+        if (!css || !backing || !this.renderer) return false;
+        const key = `${css.width}x${css.height}:${backing.width}x${backing.height}`;
+        if (!force && this._lastOffscreenViewportKey === key) return false;
+        this._lastOffscreenViewportKey = key;
+
+        if (this.camera) {
+            this.camera.aspect = css.width / Math.max(1, css.height);
+            if (typeof this.camera.clearViewOffset === 'function') this.camera.clearViewOffset();
+            this.camera.filmOffset = 0;
+            this.camera.updateProjectionMatrix();
+        }
+        try { if (typeof this.renderer.setScissorTest === 'function') this.renderer.setScissorTest(false); } catch (e) {}
+        try { if (typeof this.renderer.setViewport === 'function') this.renderer.setViewport(0, 0, css.width, css.height); } catch (e) {}
+        try { if (typeof this.renderer.setScissor === 'function') this.renderer.setScissor(0, 0, css.width, css.height); } catch (e) {}
+        return true;
+    }
+
+
+    _orbitTarget() {
+        const target = this.cam && this.cam.target ? this.cam.target : new THREE.Vector3();
+        target.set(0, 0, 0);
+        if (this.cam) this.cam.target = target;
+        return target;
+    }
+
+    _setOrbitAnglesFromOffset(offset) {
+        if (!this.cam || !offset) return;
+        const a = orbitAnglesFromOffset(offset);
+        this.cam.orbitYaw = a.yaw;
+        this.cam.orbitPitch = a.pitch;
+    }
+
+    _syncOrbitAnglesFromQuat() {
+        if (!this.cam || !this.cam.quat) return;
+        const q = this.cam.quat.clone ? this.cam.quat.clone() : new THREE.Quaternion();
+        if (!Number.isFinite(q.x) || !Number.isFinite(q.y) || !Number.isFinite(q.z) || !Number.isFinite(q.w)) return;
+        q.normalize();
+        this._setOrbitAnglesFromOffset(new THREE.Vector3(0, 0, 1).applyQuaternion(q));
+    }
+
+    _applyOrbitCamera() {
+        if (!this.camera || !this.cam) return false;
+        const target = this._orbitTarget();
+        const dist = Math.max(1, Number(this.cam.dist) || DEFAULT_ORBIT_DIST);
+        this.cam.dist = dist;
+        this.cam.distTarget = Math.max(1, Number(this.cam.distTarget) || dist);
+        if (!Number.isFinite(this.cam.orbitYaw)) this.cam.orbitYaw = orbitAnglesFromOffset(DEFAULT_ORBIT_OFFSET).yaw;
+        if (!Number.isFinite(this.cam.orbitPitch)) this.cam.orbitPitch = orbitAnglesFromOffset(DEFAULT_ORBIT_OFFSET).pitch;
+        this.cam.orbitYaw = wrapOrbitAngle(this.cam.orbitYaw);
+        this.cam.orbitPitch = wrapOrbitAngle(this.cam.orbitPitch);
+
+        const offset = orbitOffsetFromAngles(this.cam.orbitYaw, this.cam.orbitPitch, dist);
+        this.camera.up.copy(orbitUpFromAngles(this.cam.orbitYaw, this.cam.orbitPitch));
+        this.camera.position.copy(target).add(offset);
+        this.camera.lookAt(target);
+        this.camera.updateMatrixWorld(true);
+        this.cam.quat.copy(this.camera.quaternion).normalize();
+        this.cam.pos.copy(this.camera.position);
+        return true;
+    }
+
+
+    applyCameraStateSnapshot(state = {}) {
+        if (!this.camera || !this.cam || !state || typeof state !== 'object') return false;
+        const num = (v, fallback) => {
+            const n = Number(v);
+            return Number.isFinite(n) ? n : fallback;
+        };
+        const hasOrbitYaw = Number.isFinite(Number(state.orbitYaw));
+        const hasOrbitPitch = Number.isFinite(Number(state.orbitPitch));
+        const hasPos = Array.isArray(state.pos) && state.pos.length >= 3;
+
+        if (state.dist !== undefined) this.cam.dist = Math.max(1, num(state.dist, this.cam.dist || DEFAULT_ORBIT_DIST));
+        if (state.distTarget !== undefined) this.cam.distTarget = Math.max(1, num(state.distTarget, this.cam.distTarget || this.cam.dist || DEFAULT_ORBIT_DIST));
+        else this.cam.distTarget = this.cam.dist;
+        if (state.yaw !== undefined) this.cam.yaw = num(state.yaw, this.cam.yaw || 0);
+        if (state.pitch !== undefined) this.cam.pitch = num(state.pitch, this.cam.pitch || 0);
+        if (state.flyMoveSpeed !== undefined) this.cam.flyMoveSpeed = Math.max(0.05, num(state.flyMoveSpeed, this.cam.flyMoveSpeed || 1));
+        if (state.orbitZoomSpeed !== undefined) this.cam.orbitZoomSpeed = Math.max(0.1, num(state.orbitZoomSpeed, this.cam.orbitZoomSpeed || 1));
+        if (Array.isArray(state.target) && state.target.length >= 3 && this.cam.target && this.cam.target.fromArray) {
+            try { this.cam.target.fromArray(state.target.slice(0, 3)); } catch (e) {}
+        }
+        if (hasPos && this.cam.pos && this.cam.pos.fromArray) {
+            try { this.cam.pos.fromArray(state.pos.slice(0, 3)); } catch (e) {}
+        }
+        if (Array.isArray(state.quat) && state.quat.length >= 4 && this.cam.quat && this.cam.quat.fromArray) {
+            try { this.cam.quat.fromArray(state.quat.slice(0, 4)).normalize(); } catch (e) {}
+        }
+        if (hasOrbitYaw) this.cam.orbitYaw = num(state.orbitYaw, this.cam.orbitYaw || 0);
+        if (hasOrbitPitch) this.cam.orbitPitch = wrapOrbitAngle(num(state.orbitPitch, this.cam.orbitPitch || 0));
+        if ((!hasOrbitYaw || !hasOrbitPitch) && hasPos) {
+            const target = this._orbitTarget();
+            const offset = this.cam.pos.clone().sub(target);
+            const angles = orbitAnglesFromOffset(offset);
+            if (!hasOrbitYaw) this.cam.orbitYaw = angles.yaw;
+            if (!hasOrbitPitch) this.cam.orbitPitch = angles.pitch;
+        }
+
+        if (window.S && window.S.moveMode === 'fly') {
+            this.camera.position.copy(this.cam.pos);
+            if (this.cam.quat && Number.isFinite(this.cam.quat.w)) this.camera.quaternion.copy(this.cam.quat).normalize();
+            else this.camera.rotation.set(this.cam.pitch || 0, this.cam.yaw || 0, 0, 'YXZ');
+            this.camera.updateMatrixWorld(true);
+            return true;
+        }
+        return this._applyOrbitCamera();
+    }
+
+    _resetOffscreenOrbitCamera() {
+        if (!window.SS_OFFSCREEN_SIZE || !this.camera || !this.cam) return;
+        const a = orbitAnglesFromOffset(DEFAULT_ORBIT_OFFSET);
+        this.cam.orbitYaw = Number.isFinite(this.cam.orbitYaw) ? this.cam.orbitYaw : a.yaw;
+        this.cam.orbitPitch = Number.isFinite(this.cam.orbitPitch) ? wrapOrbitAngle(this.cam.orbitPitch) : a.pitch;
+        this.cam.dist = Number.isFinite(Number(this.cam.dist)) && this.cam.dist > 0 ? this.cam.dist : DEFAULT_ORBIT_DIST;
+        this.cam.distTarget = Number.isFinite(Number(this.cam.distTarget)) && this.cam.distTarget > 0 ? this.cam.distTarget : this.cam.dist;
+        this._applyOrbitCamera();
+    }
+
 
     setupRenderer() {
         this.renderer = new THREE.WebGPURenderer({
@@ -286,13 +1087,31 @@ export class Engine {
             alpha: true,
             powerPreference: 'high-performance'
         });
-        this.renderer.setPixelRatio(this.resolvePixelRatio());
-        this.renderer.setSize(window.innerWidth, window.innerHeight);
+        const offscreenSize = window.SS_OFFSCREEN_SIZE || null;
+        if (offscreenSize) {
+            const css = this._offscreenCssSize ? this._offscreenCssSize() : { width: Math.max(1, Math.floor(Number(offscreenSize.width) || Number(window.innerWidth) || 1)), height: Math.max(1, Math.floor(Number(offscreenSize.height) || Number(window.innerHeight) || 1)) };
+            const backing = this._offscreenBackingSize ? this._offscreenBackingSize() : css;
+            if (this.camera) {
+                this.camera.aspect = css.width / Math.max(1, css.height);
+                if (typeof this.camera.clearViewOffset === 'function') this.camera.clearViewOffset();
+                this.camera.filmOffset = 0;
+                this.camera.updateProjectionMatrix();
+            }
+            this._lastPerfPixelRatio = 1;
+            this.renderer.setPixelRatio(1);
+            this.renderer.setSize(css.width, css.height, false);
+            this._syncOffscreenViewport(true);
+        } else {
+            this.renderer.setPixelRatio(this.resolvePixelRatio());
+            this.renderer.setSize(window.innerWidth, window.innerHeight);
+        }
     }
 
 
     resolvePixelRatio() {
-        const dpr = Number(window.devicePixelRatio) || 1;
+        const offscreenSize = window.SS_OFFSCREEN_SIZE || null;
+        if (offscreenSize) return 1;
+        const dpr = Number(offscreenSize?.devicePixelRatio) || Number(window.devicePixelRatio) || 1;
         const active = this.getActiveParticleCount(window.S?.freeEnergy ?? this.particleCount ?? 0);
         const perf = window.SS_PERF || {};
         let cap = Number.isFinite(+perf.maxPixelRatio) ? +perf.maxPixelRatio : 1.75;
@@ -302,13 +1121,34 @@ export class Engine {
         const z = this.getZoomOptimizationState ? this.getZoomOptimizationState() : { pixelRatioScale: 1 };
         const canvasScale = Math.max(0.4, Math.min(1, Number(window.S?.canvasResolutionScale) || 1));
         cap *= z.pixelRatioScale || 1;
-        const base = Math.min(dpr, cap) * canvasScale;
+
+        // WebGPU's default device often exposes maxTextureDimension2D = 8192
+        // even when the adapter can support more with explicit requiredLimits.
+        // Do not let DPR / perf pixel ratio inflate a large browser window into
+        // an invalid swapchain, depth buffer, or MSAA texture.
+        const safeTextureDim = Math.max(2048, Math.min(8192, Number(perf.safeMaxTextureDimension2D) || 8192));
+        const cssWidth = Math.max(1, Number(offscreenSize?.width) || Number(this.canvas?.clientWidth) || Number(window.innerWidth) || 1);
+        const cssHeight = Math.max(1, Number(offscreenSize?.height) || Number(this.canvas?.clientHeight) || Number(window.innerHeight) || 1);
+        const maxCssDim = Math.max(cssWidth, cssHeight);
+        const maxRatioForCanvas = Math.max(0.1, (safeTextureDim - 32) / maxCssDim);
+
+        const raw = Math.min(dpr, cap) * canvasScale;
         const pressureMin = (z.overdrawPressure || 0) > 0.55 ? 0.48 : 0.55;
-        return Math.max(Math.min(pressureMin, canvasScale), Math.min(dpr, base));
+        const floor = Math.min(Math.min(pressureMin, canvasScale), maxRatioForCanvas);
+        const next = Math.min(dpr, raw, maxRatioForCanvas);
+        return Math.max(0.1, Math.min(maxRatioForCanvas, Math.max(floor, next)));
     }
 
     applyPixelRatioIfNeeded(force = false) {
         if (!this.renderer) return;
+        if (window.SS_OFFSCREEN_SIZE) {
+            if (force || this._lastPerfPixelRatio !== 1) {
+                this._lastPerfPixelRatio = 1;
+                this.renderer.setPixelRatio(1);
+            }
+            this._syncOffscreenViewport(force);
+            return;
+        }
         const next = this.resolvePixelRatio();
         if (!force && Math.abs(next - (this._lastPerfPixelRatio || 0)) < 0.04) return;
         this._lastPerfPixelRatio = next;
@@ -336,7 +1176,7 @@ export class Engine {
         const radius = 5000;
         const widthSegs = 32;
         const heightSegs = 24;
-        const geo = ensureGeometryUv(new THREE.SphereGeometry(radius, widthSegs, heightSegs));
+        const geo = new THREE.SphereGeometry(radius, widthSegs, heightSegs);
         // Use WebGPU-compatible MeshBasicNodeMaterial with wireframe=true.
         // The earlier LineBasicMaterial + LineSegments combo doesn't render
         // under the WebGPU renderer used by this app — it silently failed
@@ -402,27 +1242,25 @@ export class Engine {
     }
 
     setupCamera() {
-        // Far plane raised to 1,000,000 (from the previous 5000) so users
-        // who zoom way out — which they can, since orbit-zoom is now
-        // uncapped — don't hit a visible spherical "void" at the far clip.
-        // Depth precision degrades with large near/far ratios, but for a
-        // particle visualizer with no fine geometry this is invisible.
-        this.camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1_000_000);
-        // Default camera position matches the hero coordinate in window.S
-        // — a tight orbit (dist=52) looking at the system from a specific
-        // angle that frames the default-parameter view well. Saved camera
-        // state in localStorage (loaded below) overrides this for return
-        // users; first-launch users land at this curated view.
-        this.camera.position.set(-11, 32, -16);
+        const offscreenSize = window.SS_OFFSCREEN_SIZE || null;
+        const camWidth = Math.max(1, Number(offscreenSize?.cssWidth ?? offscreenSize?.width) || Number(window.innerWidth) || 1);
+        const camHeight = Math.max(1, Number(offscreenSize?.cssHeight ?? offscreenSize?.height) || Number(window.innerHeight) || 1);
+        this.camera = new THREE.PerspectiveCamera(60, camWidth / camHeight, 0.1, 1_000_000);
+        if (typeof this.camera.clearViewOffset === 'function') this.camera.clearViewOffset();
+        this.camera.filmOffset = 0;
 
+        const defaultAngles = orbitAnglesFromOffset(DEFAULT_ORBIT_OFFSET);
+        const defaultPos = orbitOffsetFromAngles(defaultAngles.yaw, defaultAngles.pitch, DEFAULT_ORBIT_DIST);
         this.cam = {
-            quat: new THREE.Quaternion(-0.9466, -0.2728, 0.1182, -0.1251),
+            quat: new THREE.Quaternion(),
             dist: DEFAULT_ORBIT_DIST,
             distTarget: DEFAULT_ORBIT_DIST,
             target: new THREE.Vector3(),
-            pos: new THREE.Vector3(-11, 32, -16),
+            pos: defaultPos.clone(),
             yaw: 0,
             pitch: 0,
+            orbitYaw: defaultAngles.yaw,
+            orbitPitch: defaultAngles.pitch,
             down: false,
             mx: 0,
             my: 0,
@@ -430,19 +1268,18 @@ export class Engine {
             orbitZoomSpeed: 1.0
         };
 
+        if (window.SS_OFFSCREEN_SIZE) {
+            this._resetOffscreenOrbitCamera();
+            return;
+        }
+
         try {
             const savedCam = localStorage.getItem('ss_cam');
             if (savedCam) {
                 const c = JSON.parse(savedCam);
                 if (c.pos) this.cam.pos.fromArray(c.pos);
-                if (c.quat) this.cam.quat.fromArray(c.quat);
+                if (c.quat) this.cam.quat.fromArray(c.quat).normalize();
                 if (c.dist !== undefined) {
-                    // Only intervene on genuinely broken values (NaN, infinity,
-                    // negative, or zero). Also migrate the old tight default
-                    // camera distance (~52) to the current default zoom of 100
-                    // once, so existing localStorage doesn't make a fresh build
-                    // look like it ignored the new default. Deliberate user
-                    // zooms outside that narrow legacy-default band are kept.
                     let d = Number(c.dist);
                     if (!Number.isFinite(d) || d <= 0) {
                         d = DEFAULT_ORBIT_DIST;
@@ -458,14 +1295,23 @@ export class Engine {
                     this.cam.dist = d;
                     this.cam.distTarget = d;
                 }
-                if (c.yaw !== undefined) this.cam.yaw = c.yaw;
-                if (c.pitch !== undefined) this.cam.pitch = c.pitch;
+                if (Number.isFinite(Number(c.yaw))) this.cam.yaw = Number(c.yaw);
+                if (Number.isFinite(Number(c.pitch))) this.cam.pitch = Number(c.pitch);
+                if (Number.isFinite(Number(c.orbitYaw))) this.cam.orbitYaw = Number(c.orbitYaw);
+                else if (c.quat) this._syncOrbitAnglesFromQuat();
+                else if (c.pos) this._setOrbitAnglesFromOffset(this.cam.pos);
+                if (Number.isFinite(Number(c.orbitPitch))) this.cam.orbitPitch = wrapOrbitAngle(Number(c.orbitPitch));
                 if (c.flyMoveSpeed !== undefined) this.cam.flyMoveSpeed = c.flyMoveSpeed;
                 if (c.orbitZoomSpeed !== undefined) this.cam.orbitZoomSpeed = c.orbitZoomSpeed;
-                this.camera.position.copy(this.cam.pos);
-                this.camera.rotation.set(this.cam.pitch, this.cam.yaw, 0, 'YXZ');
             }
         } catch(e) {}
+
+        if (window.S.moveMode === 'fly') {
+            this.camera.position.copy(this.cam.pos);
+            this.camera.rotation.set(this.cam.pitch, this.cam.yaw, 0, 'YXZ');
+        } else {
+            this._applyOrbitCamera();
+        }
     }
 
     setupBuffers() {
@@ -502,9 +1348,7 @@ export class Engine {
             this.reinitializeParticles({ preferGpu: false }).catch(e => console.warn('[particles] async boot fill failed', e));
         });
 
-        this.geometry = ensureGeometryUv(new THREE.PlaneGeometry(1, 1));
-        // WebGPU/TSL particle material reads uv() for quanta masks. Keep this
-        // guaranteed even if a bundler/geometry rewrite strips default UVs.
+        this.geometry = new THREE.PlaneGeometry(1, 1);
 
         this.GRID_X = 64; this.GRID_Y = 64; this.GRID_Z = 64;
         this.GRID_TOTAL_CELLS = this.GRID_X * this.GRID_Y * this.GRID_Z;
@@ -523,25 +1367,65 @@ export class Engine {
         this.colorHistStorage = new THREE.StorageBufferAttribute(new Uint32Array(this.COLOR_BINS), 1);
     }
 
-    resizeParticles(newCount) {
+    _scheduleStructureBufferRebuild({ ribbon = false, lattice = false, delay = 220 } = {}) {
+        const needRibbon = !!ribbon;
+        const needLattice = !!lattice;
+        if (!needRibbon && !needLattice) return;
+        this._pendingStructRebuild = {
+            ribbon: !!(needRibbon || this._pendingStructRebuild?.ribbon),
+            lattice: !!(needLattice || this._pendingStructRebuild?.lattice),
+        };
+        clearTimeout(this._structRebuildTimer);
+        this._structRebuildTimer = setTimeout(() => {
+            const pending = this._pendingStructRebuild || {};
+            this._pendingStructRebuild = null;
+            const raf = typeof requestAnimationFrame === 'function'
+                ? requestAnimationFrame
+                : (fn) => setTimeout(() => fn((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()), 16);
+            const runLattice = () => {
+                if (!pending.lattice) return;
+                try { this.setupLattice(); }
+                catch (e) { console.warn('lattice rebuild failed', e); }
+            };
+            const runRibbon = () => {
+                if (!pending.ribbon) return;
+                try { this.setupRibbon(); }
+                catch (e) { console.warn('strings rebuild failed', e); }
+            };
+            // These create sizeable WebGPU storage buffers and TSL compute
+            // nodes. Do not do both in the same task/microtask; splitting them
+            // avoids the atlas→randomizer handoff hitch seen in Chrome traces.
+            raf(() => {
+                runLattice();
+                if (pending.ribbon) raf(() => setTimeout(runRibbon, 48));
+            });
+        }, Math.max(0, Number(delay) || 0));
+    }
+
+    resizeParticles(newCount, options = {}) {
         const activeCount = this.getActiveParticleCount(newCount);
-        if (this.mesh) this.mesh.count = activeCount;
+        if (this.mesh) this.mesh.count = this.getZoomDisplayParticleCount(activeCount);
         if (this.uniforms && this.uniforms.activeParticleCount) {
-            this.uniforms.activeParticleCount.value = activeCount;
+            this.uniforms.activeParticleCount.value = this.getZoomDisplayParticleCount(activeCount);
         }
-        // Rebuild the lattice + strings to match the new count — but ONLY here,
-        // on DIRECT freeEnergy changes (the slider and the nudge keys both call
-        // resizeParticles). travelTo transitions set the count straight on the
-        // uniform and never call this, so traveling between waypoints no longer
-        // rebuilds mid/post-flight — that snapped the lattice in and could leave
-        // it momentarily empty until a tab refocus re-ran the compute. Debounced
-        // so a drag rebuilds once on release rather than on every step.
-        if (this._latticeN !== activeCount) {
-            clearTimeout(this._structRebuildTimer);
-            this._structRebuildTimer = setTimeout(() => {
-                try { this.setupLattice(); this.setupRibbon(); }
-                catch (e) { console.warn('lattice/strings rebuild failed', e); }
-            }, 220);
+        // Particle buffers are fixed-capacity; freeEnergy only changes draw /
+        // active counts. Trail/string buffers are the expensive exception.
+        // Never reallocate them just because the desired count got smaller —
+        // keep the larger allocation hot and draw a smaller range. Only grow
+        // when a direct/manual path explicitly allows it. Atlas and continuous
+        // randomizer handoffs use the landed freeEnergy as a budget but must not
+        // hit WebGPU/TSL buffer+node rebuilds on the handoff frame.
+        const opts = (options && typeof options === 'object') ? options : {};
+        const allowStructureRebuild = opts.structureRebuild !== false && opts.resizeStructures !== false;
+        const allowStructureGrow = allowStructureRebuild && opts.allowStructureGrow !== false;
+        const desiredRibbonN = Math.max(2, resolveRibbonParticleCount(newCount, this.particleCount));
+        const desiredLatticeN = Math.max(2, resolveLatticeParticleCount(newCount, this.particleCount));
+        const ribbonCapacity = Math.max(0, Number(this._ribbonCapacityN) || Number(this._ribbonN) || 0);
+        const latticeCapacity = Math.max(0, Number(this._latticeCapacityN) || Number(this._latticeN) || 0);
+        const ribbonGrow = desiredRibbonN > Math.max(2, ribbonCapacity);
+        const latticeGrow = desiredLatticeN > Math.max(2, latticeCapacity);
+        if (allowStructureGrow && (ribbonGrow || latticeGrow)) {
+            this._scheduleStructureBufferRebuild({ ribbon: ribbonGrow, lattice: latticeGrow, delay: Math.max(260, Number(opts.structureDelayMs) || 0) });
         }
     }
 
@@ -593,7 +1477,7 @@ export class Engine {
         this.cpuPosArray = this.posStorage.array;
         this.cpuVelArray = this.velStorage.array;
         this.cpuColArray = this.colStorage.array;
-        this.syncCompatParticleCloud(true);
+        if (this.isPointsFallbackActive() || this.compatParticleCloud) this.syncCompatParticleCloud(true);
 
         for (const storageAttr of [this.posStorage, this.velStorage, this.colStorage]) {
             storageAttr.needsUpdate = true;
@@ -625,6 +1509,7 @@ export class Engine {
             offsetX: uniform(window.S.offsetX),
             offsetY: uniform(window.S.offsetY),
             offsetZ: uniform(window.S.offsetZ),
+            offscreenCenterLock: uniform(0.0),
             billboardOffset: uniform(window.S.billboardOffset),
             colorMode: uniform(window.S.colorMode || 0),
             colorRange: uniform(window.S.hue || 0.5),
@@ -635,6 +1520,8 @@ export class Engine {
             particleCloseScale: uniform(window.S.particleCloseScale === false ? 0.0 : 1.0),
             particleCloseScaleStrength: uniform(window.S.particleCloseScaleStrength ?? 0.72),
             particleCloseScaleNear: uniform(window.S.particleCloseScaleNear ?? 20),
+            overdrawParticleScale: uniform(1.0),
+            overdrawOpacityScale: uniform(1.0),
             resetSeed: uniform(1.0)
         };
 
@@ -1108,6 +1995,9 @@ export class Engine {
         const worldOffset = vec3(this.uniforms.offsetX, this.uniforms.offsetY, this.uniforms.offsetZ);
         const worldPos = add(posFromBuf.xyz, worldOffset);
         const viewPos = modelViewMatrix.mul(vec4(worldPos, 1.0)).xyz;
+        const centerViewPos = modelViewMatrix.mul(vec4(worldOffset, 1.0)).xyz;
+        const centeredViewPos = vec3(sub(viewPos.x, centerViewPos.x), sub(viewPos.y, centerViewPos.y), viewPos.z);
+        const drawViewPos = mix(viewPos, centeredViewPos, this.uniforms.offscreenCenterLock);
 
         const colorMode = this.uniforms.colorMode;
         // Perceptual gamma curve on color spectrum range: linear colorRange
@@ -1161,10 +2051,10 @@ export class Engine {
         const density = getSmoothDensity(posFromBuf.xyz);
         const speed = length(velFromBuf.xyz);
 
-        const pSize = mul(posFromBuf.w, this.uniforms.pointSize, float(0.4));
-        const finalSize = max(pSize, float(0.1));
+        const pSize = mul(posFromBuf.w, this.uniforms.pointSize, float(0.4), this.uniforms.overdrawParticleScale);
+        const finalSize = max(pSize, float(0.06));
         const lQuadPos = positionLocal.mul(finalSize);
-        const fViewPos = add(viewPos, vec3(lQuadPos.x, lQuadPos.y, this.uniforms.billboardOffset));
+        const fViewPos = add(drawViewPos, vec3(lQuadPos.x, lQuadPos.y, this.uniforms.billboardOffset));
         this.material.vertexNode = cameraProjectionMatrix.mul(vec4(fViewPos, 1.0));
 
         const spectrumWidth = add(mul(colorRange, float(1.2)), float(0.05));
@@ -1250,7 +2140,7 @@ export class Engine {
         const life = velFromBuf.w;
         const fadeMod = select(this.uniforms.halfLife.lessThan(29.5), clamp(mul(life, 3.0), 0.0, 1.0), float(1.0));
         
-        this.material.colorNode = vec4(finalColor, mul(this.uniforms.pointOpacity, mul(mask, fadeMod)));
+        this.material.colorNode = vec4(finalColor, mul(this.uniforms.pointOpacity, mul(this.uniforms.overdrawOpacityScale, mul(mask, fadeMod))));
     }
 
     setupRibbon() {
@@ -1259,6 +2149,7 @@ export class Engine {
         }
         const N = Math.max(2, resolveRibbonParticleCount(window.S.freeEnergy, this.particleCount));
         this._ribbonN = N;
+        this._ribbonCapacityN = N;
         const S = 24;
         this._ribbonS = S;
         
@@ -1373,7 +2264,7 @@ export class Engine {
                 // upper range. Previously `pointSize * 0.5` made trails
                 // outgrow particles fast as resolution increased; the new
                 // formula keeps them visually subordinate to the cloud.
-                const hw = mul(sqrt(U.pointSize), 0.25);
+                const hw = mul(sqrt(U.pointSize), 0.25, U.overdrawParticleScale);
 
                 const outIdx = mul(tId, uint(2));
                 outPos.element(outIdx).assign(vec4(add(pos, mul(norm, hw)), 1.0));
@@ -1393,7 +2284,7 @@ export class Engine {
                 // The 0.22 scale means the full slider range now scales
                 // from invisible up to "what 0.1 used to look like" — a
                 // gradient that actually fits the system's natural use.
-                const fadeAlpha = mul(mul(baseFade, distFade), mul(U.pointOpacity, float(0.055)));
+                const fadeAlpha = mul(mul(baseFade, distFade), mul(U.pointOpacity, mul(U.overdrawOpacityScale, float(0.055))));
 
                 const speed1 = length(vBuf.element(i1).xyz);
                 const speed2 = length(vBuf.element(i2).xyz);
@@ -1444,6 +2335,7 @@ export class Engine {
         }
         const N = Math.max(2, resolveLatticeParticleCount(window.S.freeEnergy, this.particleCount));
         this._latticeN = N;
+        this._latticeCapacityN = N;
         const segCount = N - 1;
         const totalVerts = N * 2;
         this.latticePosStorage = new THREE.StorageBufferAttribute(new Float32Array(totalVerts * 4), 4);
@@ -1506,7 +2398,7 @@ export class Engine {
                 // Trail half-width: thinner than particles, sqrt remap on
                 // resolution so growth against the resolution slider is
                 // gentle in the upper range. Matches the ribbon material.
-                const hw = mul(sqrt(U.pointSize), 0.25);
+                const hw = mul(sqrt(U.pointSize), 0.25, U.overdrawParticleScale);
                 // Trail length scalar — extends segment along tangent so
                 // the slider visibly affects the lattice (not just ribbons).
                 const segScale = mul(U.trailLen, 0.1);
@@ -1523,7 +2415,7 @@ export class Engine {
                 // Matches the ribbon material — prevents blow-out at low
                 // opacity slider values; full slider range maps to
                 // "previously 0 → 0.1" effective alpha.
-                const fadeAlpha = mul(mul(baseFade, distFade), mul(U.pointOpacity, float(0.055)));
+                const fadeAlpha = mul(mul(baseFade, distFade), mul(U.pointOpacity, mul(U.overdrawOpacityScale, float(0.055))));
 
                 const vel = vBuf.element(i).xyz;
                 const speed = length(vel);
@@ -1565,8 +2457,6 @@ export class Engine {
         quadGeo.setAttribute('position', new THREE.BufferAttribute(quadPos, 3));
         quadGeo.setAttribute('uv', new THREE.BufferAttribute(quadUv, 2));
         quadGeo.setIndex([0,1,2, 1,3,2]);
-        ensureGeometryUv(quadGeo, 4);
-
         const mat = new THREE.MeshBasicNodeMaterial();
         mat.transparent = true;
         mat.blending = THREE.AdditiveBlending;
@@ -1580,8 +2470,11 @@ export class Engine {
         const storageIdx = add(mul(instanceIndex, stride), uint(vertexIndex));
         const wPos = rPosBuf.element(storageIdx);
         const worldOffset = vec3(this.uniforms.offsetX, this.uniforms.offsetY, this.uniforms.offsetZ);
-        const rViewPos = modelViewMatrix.mul(vec4(add(wPos.xyz, worldOffset), 1.0));
-        mat.vertexNode = cameraProjectionMatrix.mul(vec4(rViewPos.xyz, 1.0));
+        const rViewPos = modelViewMatrix.mul(vec4(add(wPos.xyz, worldOffset), 1.0)).xyz;
+        const rCenterViewPos = modelViewMatrix.mul(vec4(worldOffset, 1.0)).xyz;
+        const rCenteredViewPos = vec3(sub(rViewPos.x, rCenterViewPos.x), sub(rViewPos.y, rCenterViewPos.y), rViewPos.z);
+        const rDrawViewPos = mix(rViewPos, rCenteredViewPos, this.uniforms.offscreenCenterLock);
+        mat.vertexNode = cameraProjectionMatrix.mul(vec4(rDrawViewPos, 1.0));
         const rCol = rColBuf.element(storageIdx);
         mat.colorNode = vec4(rCol.xyz, rCol.w);
 
@@ -1594,7 +2487,119 @@ export class Engine {
         return mesh;
     }
 
+    setupGpuPointCloud() {
+        if (!THREE.PointsNodeMaterial) {
+            this.gpuPointCloud = null;
+            return;
+        }
+
+        const count = Math.max(1, this.particleCount | 0);
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(count * 3), 3));
+        geo.setDrawRange(0, 0);
+
+        const mat = new THREE.PointsNodeMaterial({
+            transparent: true,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false,
+            depthTest: false
+        });
+        mat.transparent = true;
+        mat.blending = THREE.AdditiveBlending;
+        mat.depthWrite = false;
+        mat.depthTest = false;
+        mat.opacity = 1;
+
+        const idx = uint(vertexIndex);
+        const posFromBuf = storage(this.posStorage, 'vec4', this.particleCount).element(idx);
+        const velFromBuf = storage(this.velStorage, 'vec4', this.particleCount).element(idx);
+
+        const getCellIndex = Fn(([cx, cy, cz]) => {
+            const wx = uint(bitAnd(add(cx, int(10000)), int(63)));
+            const wy = uint(bitAnd(add(cy, int(10000)), int(63)));
+            const wz = uint(bitAnd(add(cz, int(10000)), int(63)));
+            return add(wx, add(mul(wy, uint(this.GRID_X)), mul(wz, uint(this.GRID_X * this.GRID_Y))));
+        });
+
+        const getSmoothDensity = Fn(([p]) => {
+            const fPos = div(p, this.uniforms.coherence).sub(0.5);
+            const base = floor(fPos);
+            const f = fract(fPos);
+            const bx = int(base.x); const by = int(base.y); const bz = int(base.z);
+            const bx1 = bx.add(1);  const by1 = by.add(1);  const bz1 = bz.add(1);
+            const sBuf = storage(this.gridCountStorage, 'uint', this.GRID_TOTAL_CELLS);
+            const c000 = float(sBuf.element(getCellIndex(bx, by, bz)));
+            const c100 = float(sBuf.element(getCellIndex(bx1, by, bz)));
+            const c010 = float(sBuf.element(getCellIndex(bx, by1, bz)));
+            const c110 = float(sBuf.element(getCellIndex(bx1, by1, bz)));
+            const c001 = float(sBuf.element(getCellIndex(bx, by, bz1)));
+            const c101 = float(sBuf.element(getCellIndex(bx1, by, bz1)));
+            const c011 = float(sBuf.element(getCellIndex(bx, by1, bz1)));
+            const c111 = float(sBuf.element(getCellIndex(bx1, by1, bz1)));
+            const mx00 = mix(c000, c100, f.x);
+            const mx10 = mix(c010, c110, f.x);
+            const mx01 = mix(c001, c101, f.x);
+            const mx11 = mix(c011, c111, f.x);
+            const mx0 = mix(mx00, mx10, f.y);
+            const mx1 = mix(mx01, mx11, f.y);
+            return mix(mx0, mx1, f.z);
+        });
+
+        const worldOffset = vec3(this.uniforms.offsetX, this.uniforms.offsetY, this.uniforms.offsetZ);
+        const worldPos = add(posFromBuf.xyz, worldOffset);
+        const viewPos = modelViewMatrix.mul(vec4(worldPos, 1.0)).xyz;
+        const centerViewPos = modelViewMatrix.mul(vec4(worldOffset, 1.0)).xyz;
+        const centeredViewPos = vec3(sub(viewPos.x, centerViewPos.x), sub(viewPos.y, centerViewPos.y), viewPos.z);
+        const drawViewPos = mix(viewPos, centeredViewPos, this.uniforms.offscreenCenterLock);
+        mat.vertexNode = cameraProjectionMatrix.mul(vec4(drawViewPos, 1.0));
+
+        const spectrumWidth = add(mul(sqrt(this.uniforms.colorRange), 1.2), 0.05);
+        const speed = length(velFromBuf.xyz);
+        const sizeNorm = clamp(div(sub(posFromBuf.w, float(0.5)), float(1.5)), 0.0, 1.0);
+        const sizeVal = clamp(mul(sizeNorm, spectrumWidth), 0.0, 1.0);
+        const velVal = clamp(div(sqrt(speed), mul(spectrumWidth, float(5.0))), 0.0, 1.0);
+        const dNorm = clamp(div(log2(add(float(getSmoothDensity(posFromBuf.xyz)), 1.0)), mul(spectrumWidth, float(6.0))), 0.0, 1.0);
+        const densityVal = mul(sub(float(1.0), dNorm), float(0.66));
+        const monoAudioColor = spectralColor(fract(add(sqrt(this.uniforms.colorRange), add(mul(this.uniforms.audioBeat, float(0.23)), mul(this.uniforms.audioRms, float(0.09))))));
+        const baseModeColor = select(this.uniforms.colorMode.equal(1), spectralColor(sizeVal),
+            select(this.uniforms.colorMode.equal(2), spectralColor(velVal),
+                select(this.uniforms.colorMode.equal(3), spectralColor(densityVal), monoAudioColor)));
+        const audioColorBoost = clamp(add(mul(this.uniforms.audioRms, float(0.16)), mul(this.uniforms.audioBeat, float(0.28))), 0.0, 0.40);
+        const satPerceptual = clamp(add(sqrt(this.uniforms.sat), add(float(0.18), audioColorBoost)), 0.0, 1.0);
+        const finalColor = mix(mul(baseModeColor, float(0.36)), baseModeColor, satPerceptual);
+        const fadeMod = select(this.uniforms.halfLife.lessThan(29.5), clamp(mul(velFromBuf.w, 3.0), 0.0, 1.0), float(1.0));
+        mat.colorNode = vec4(finalColor, mul(this.uniforms.pointOpacity, mul(this.uniforms.overdrawOpacityScale, fadeMod)));
+
+        const cloud = new THREE.Points(geo, mat);
+        cloud.frustumCulled = false;
+        cloud.renderOrder = 29;
+        cloud.visible = false;
+        this.gpuPointCloud = cloud;
+        this.scene.add(cloud);
+    }
+
+    syncGpuPointCloud(alpha = 1, displayCount = null) {
+        if (!this.gpuPointCloud) return;
+        const active = !!(this.isGpuPointsMode() && alpha > 0.001 && window.S?.showParticles !== false);
+        const cloud = this.gpuPointCloud;
+        cloud.visible = active;
+        if (!active) {
+            cloud.geometry.setDrawRange(0, 0);
+            return;
+        }
+        const drawCount = Number.isFinite(Number(displayCount))
+            ? Math.max(0, Math.floor(Number(displayCount)))
+            : this.getFrameDisplayParticleCount(window.S.freeEnergy);
+        cloud.geometry.setDrawRange(0, drawCount);
+        if (cloud.material) {
+            cloud.material.opacity = Math.max(0, Math.min(1, Number(alpha) || 0));
+            cloud.material.transparent = true;
+        }
+    }
+
+
     setupCompatParticleCloud() {
+        if (this.compatParticleCloud) return;
         const count = Math.max(1, this.particleCount | 0);
         const positions = new Float32Array(count * 3);
         const colors = new Float32Array(count * 3);
@@ -1603,18 +2608,9 @@ export class Engine {
         this.compatParticlePositions = positions;
         this.compatParticleColors = colors;
         this.compatParticleModeIds = modes;
-        this._compatShapeTextureCache = this._compatShapeTextureCache || {};
-
         const geo = new THREE.BufferGeometry();
         geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
         geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-        // WebGPU's PointsMaterial/map path can still ask for uv. Points do not
-        // naturally need it, but a neutral UV attribute avoids AttributeNode
-        // warnings when quanta textures are active.
-        const pointUvs = new Float32Array(count * 2);
-        for (let i = 0; i < count; i++) { pointUvs[i * 2] = 0.5; pointUvs[i * 2 + 1] = 0.5; }
-        geo.setAttribute('uv', new THREE.BufferAttribute(pointUvs, 2));
-
         const mat = new THREE.PointsMaterial({
             size: Number(window.S?.compatParticleSize) || 0.60,
             sizeAttenuation: true,
@@ -1630,7 +2626,7 @@ export class Engine {
         const cloud = new THREE.Points(geo, mat);
         cloud.frustumCulled = false;
         cloud.renderOrder = 30;
-        cloud.visible = !!(window.S && window.S.compatParticleFallback);
+        cloud.visible = this.isPointsFallbackActive();
         this.compatParticleCloud = cloud;
         this.scene.add(cloud);
         this.syncCompatParticleCloud(true);
@@ -1646,62 +2642,6 @@ export class Engine {
         };
     }
 
-
-    getCompatParticleTexture(shape = 'circle') {
-        const key = String(shape || 'circle');
-        this._compatShapeTextureCache = this._compatShapeTextureCache || {};
-        if (this._compatShapeTextureCache[key]) return this._compatShapeTextureCache[key];
-        const c = document.createElement('canvas');
-        c.width = 64;
-        c.height = 64;
-        const ctx = c.getContext('2d');
-        ctx.clearRect(0, 0, 64, 64);
-        ctx.fillStyle = '#fff';
-        ctx.save();
-        ctx.translate(32, 32);
-        if (key === 'square') {
-            ctx.fillRect(-25, -25, 50, 50);
-        } else if (key === 'diamond') {
-            ctx.rotate(Math.PI / 4);
-            ctx.fillRect(-22, -22, 44, 44);
-        } else {
-            ctx.beginPath();
-            ctx.arc(0, 0, 26, 0, Math.PI * 2);
-            ctx.fill();
-        }
-        ctx.restore();
-        const tex = new THREE.CanvasTexture(c);
-        tex.needsUpdate = true;
-        this._compatShapeTextureCache[key] = tex;
-        return tex;
-    }
-
-    updateCompatParticleMaterialOptics() {
-        const cloud = this.compatParticleCloud;
-        if (!cloud || !cloud.material) return;
-        const mat = cloud.material;
-        const shape = String(window.S?.shape || 'circle');
-
-        // Hard kill the PointsMaterial texture-map branch. It is the one
-        // remaining path that can compile Three's uv AttributeNode before our
-        // geometry guards run, especially when old localStorage has
-        // compatSpriteMap:true. Quanta still affects pixel size/opacity and
-        // structure dynamics, but not via a sprite texture.
-        if (window.S) window.S.compatSpriteMap = false;
-        if (mat.map) {
-            mat.map = null;
-            mat.alphaMap = null;
-            mat.needsUpdate = true;
-        }
-        if (mat.alphaTest !== 0.0) {
-            mat.alphaTest = 0.0;
-            mat.needsUpdate = true;
-        }
-        if (this._compatLastShape !== shape || this._compatLastSpriteMap !== false) {
-            this._compatLastShape = shape;
-            this._compatLastSpriteMap = false;
-        }
-    }
 
     _makeCompatLineLayer(name, maxSegments, opacity, renderOrder) {
         const safeSegments = Math.max(1, Math.floor(maxSegments || 1));
@@ -1754,6 +2694,7 @@ export class Engine {
     }
 
     setupCompatStructureLayers() {
+        if (this.compatRibbonLayer || this.compatCurveLayer || this.compatCellLayer) return;
         const S = window.S || {};
         const ribbonBudget = Math.max(32, Math.min(260, Math.floor(Number(S.compatRibbonBudget) || 220)));
         const curveBudget = Math.max(16, Math.min(120, Math.floor(Number(S.compatCurveBudget) || 80)));
@@ -1900,12 +2841,13 @@ export class Engine {
 
     updateCompatStructureLayers(force = false) {
         const S = window.S || {};
-        const enabled = !!(S.compatParticleFallback && S.compatStructureLayers !== false);
+        const enabled = !!(this.isPointsFallbackActive() && S.compatStructureLayers !== false);
         const wantsAnyStructure = !!(S.showRibbons || S.tessRibbons || S.visualEffectGeometry === true || S.compatAllowManualStructure === true);
         if (!enabled || !wantsAnyStructure || !this.cpuPosArray) {
             this._hideCompatStructureLayers();
             return;
         }
+        if (!this.ensureCompatStructureLayers()) return;
         const z = this.getZoomOptimizationState();
         const profile = String(S.perfProfile || 'balanced');
         const profileAdd = profile === 'potato' ? 6 : profile === 'speed' ? 4 : profile === 'quality' ? 1 : 2;
@@ -2062,7 +3004,7 @@ export class Engine {
     }
 
     stepCompatParticleSimulation(dtRaw = 0.016) {
-        if (!window.S || window.S.compatParticleFallback !== true || window.S.compatParticleCpuMotion === false) return;
+        if (!window.S || !this.isPointsFallbackActive() || window.S.compatParticleCpuMotion === false) return;
         if (!this.cpuPosArray || !this.cpuVelArray) return;
 
         const active = Math.min(
@@ -2384,11 +3326,11 @@ export class Engine {
     }
 
     syncCompatParticleCloud(force = false) {
-        if (!this.compatParticleCloud || !this.compatParticlePositions || !this.cpuPosArray) return;
-        if (!window.S || window.S.compatParticleFallback !== true) {
-            this.compatParticleCloud.visible = false;
+        if (!window.S || !this.isPointsFallbackActive()) {
+            if (this.compatParticleCloud) this.compatParticleCloud.visible = false;
             return;
         }
+        if (!this.ensureCompatParticleCloud() || !this.compatParticlePositions || !this.cpuPosArray) return;
         const active = Math.min(
             this.getZoomDisplayParticleCount(this.getActiveParticleCount(window.S?.freeEnergy)),
             Math.max(1, Number(window.S?.compatParticleMaxCpuActive) || this.particleCount),
@@ -2401,7 +3343,6 @@ export class Engine {
             cloud.position.set(Number(S.offsetX) || 0, Number(S.offsetY) || 0, Number(S.offsetZ) || 0);
             if (this._visualSwimOffset) cloud.position.add(this._visualSwimOffset);
         }
-        this.updateCompatParticleMaterialOptics();
         cloud.geometry.setDrawRange(0, active);
 
         const zoomState = this.getZoomOptimizationState();
@@ -2463,33 +3404,25 @@ export class Engine {
             try { await this.reinitializeParticles({ preferGpu: false }); } catch (e2) { console.warn('[particles] CPU seed fallback failed:', e2 && e2.message ? e2.message : e2); }
             return false;
         } finally {
-            this.syncCompatParticleCloud(true);
+            if (this.isPointsFallbackActive() || this.compatParticleCloud) this.syncCompatParticleCloud(true);
         }
     }
 
     forceParticleVisibility() {
         if (!window.S) return;
         window.S.showParticles = true;
-        window.S.compatParticleFallback = true;
         if (!Number.isFinite(Number(window.S.opacity)) || Number(window.S.opacity) <= 0.001) window.S.opacity = 0.15;
         if (!Number.isFinite(Number(window.S.resolution)) || Number(window.S.resolution) <= 0.001) window.S.resolution = 0.1;
         if (!Number.isFinite(Number(window.S.freeEnergy)) || Number(window.S.freeEnergy) < 1000) window.S.freeEnergy = 100000;
-        if (this.cam) {
-            this.cam.dist = DEFAULT_ORBIT_DIST;
-            this.cam.distTarget = DEFAULT_ORBIT_DIST;
-            this.cam.quat.identity();
-            this.cam.pos.set(0, 0, DEFAULT_ORBIT_DIST);
-            this.cam.yaw = 0;
-            this.cam.pitch = 0;
-        }
         this.updateUniforms();
         this.applyPerfLimits();
-        this.syncCompatParticleCloud(true);
+        this.syncGpuPointCloud(1);
+        if (this.isPointsFallbackActive() || this.compatParticleCloud) this.syncCompatParticleCloud(true);
     }
 
     setupMesh() {
         this.mesh = new THREE.InstancedMesh(this.geometry, this.material, this.particleCount);
-        this.mesh.count = this.getZoomDisplayParticleCount(this.getActiveParticleCount(window.S.freeEnergy));
+        this.mesh.count = this.getFrameDisplayParticleCount(window.S.freeEnergy);
         this.mesh.frustumCulled = false;
 
         // WebGPU/InstancedMesh can render nothing if the instance matrix buffer
@@ -2498,9 +3431,15 @@ export class Engine {
         // instancing path. Seed identity matrices once so instance transforms
         // can never collapse the quads to zero scale.
         try {
-            const ident = new THREE.Matrix4();
-            for (let i = 0; i < this.particleCount; i++) this.mesh.setMatrixAt(i, ident);
-            if (this.mesh.instanceMatrix) this.mesh.instanceMatrix.needsUpdate = true;
+            const m = this.mesh.instanceMatrix;
+            const a = m && m.array;
+            if (a && a.length >= this.particleCount * 16) {
+                a.fill(0);
+                for (let i = 0, j = 0; i < this.particleCount; i++, j += 16) {
+                    a[j] = 1; a[j + 5] = 1; a[j + 10] = 1; a[j + 15] = 1;
+                }
+                m.needsUpdate = true;
+            }
         } catch (e) {
             console.warn('[particles] instance identity init skipped:', e && e.message ? e.message : e);
         }
@@ -2509,6 +3448,20 @@ export class Engine {
     }
 
     resize(width, height) {
+        const offscreenSize = window.SS_OFFSCREEN_SIZE || null;
+        if (offscreenSize) {
+            const css = this._offscreenCssSize ? this._offscreenCssSize() : { width: Math.max(1, Math.floor(Number(offscreenSize.width) || Number(width) || 1)), height: Math.max(1, Math.floor(Number(offscreenSize.height) || Number(height) || 1)) };
+            const backing = this._offscreenBackingSize ? this._offscreenBackingSize() : css;
+            this.camera.aspect = css.width / Math.max(1, css.height);
+            if (typeof this.camera.clearViewOffset === 'function') this.camera.clearViewOffset();
+            this.camera.filmOffset = 0;
+            this.camera.updateProjectionMatrix();
+            this.renderer.setPixelRatio(1);
+            this._lastPerfPixelRatio = 1;
+            this.renderer.setSize(css.width, css.height, false);
+            this._syncOffscreenViewport(true);
+            return;
+        }
         this.camera.aspect = width / height;
         this.camera.updateProjectionMatrix();
         this.applyPixelRatioIfNeeded(true);
@@ -2519,9 +3472,11 @@ export class Engine {
         const cam = this.cam;
         const keys = {};
 
-        canvas.addEventListener('mousedown', e => { 
-            if (e.button === 1) return;
-            cam.down = true; cam.mx = e.clientX; cam.my = e.clientY; 
+        canvas.addEventListener('mousedown', e => {
+            if (e.button === 1) { e.preventDefault(); return; }
+            cam.down = true;
+            cam.mx = e.clientX;
+            cam.my = e.clientY;
         });
         window.addEventListener('mouseup', () => cam.down = false);
         window.addEventListener('mousemove', e => {
@@ -2538,12 +3493,8 @@ export class Engine {
             }
 
             if (window.S.moveMode === 'orbit') {
-                const angle = Math.sqrt(dx * dx + dy * dy) * 0.006;
-                if (angle > 0.0001) {
-                    const axis = new THREE.Vector3(dy, dx, 0).normalize();
-                    const qOff = new THREE.Quaternion().setFromAxisAngle(axis, angle);
-                    cam.quat.multiply(qOff).normalize();
-                }
+                cam.orbitYaw -= dx * ORBIT_ROTATE_SPEED;
+                cam.orbitPitch = wrapOrbitAngle(cam.orbitPitch + dy * ORBIT_ROTATE_SPEED);
             } else {
                 cam.yaw -= dx * 0.003;
                 cam.pitch -= dy * 0.003;
@@ -2597,7 +3548,6 @@ export class Engine {
             }
         }, { passive: true });
         canvas.addEventListener('contextmenu', e => e.preventDefault());
-        canvas.addEventListener('mousedown', e => { if (e.button === 1) e.preventDefault(); });
 
         window.addEventListener('keydown', e => {
             // Skip keys destined for any text-input surface (inputs,
@@ -2660,21 +3610,14 @@ export class Engine {
                 cam.distTarget = cam.distTarget + cam.distTarget * 0.01 * cam.orbitZoomSpeed;
             }
 
-            // Rotation inputs: Arrows + A/D for horizontal. A/D matches WASD
-            // muscle memory while leaving W/S free for zoom (their existing
-            // role in orbit mode). No W/S for vertical rotation since those
-            // would conflict with zoom; arrow keys are the unambiguous
-            // vertical rotation path.
             let oDx = 0, oDy = 0;
-            if (keys['ArrowLeft']  || keys['KeyA']) oDx -= 2;
-            if (keys['ArrowRight'] || keys['KeyD']) oDx += 2;
-            if (keys['ArrowUp'])   oDy -= 2;
-            if (keys['ArrowDown']) oDy += 2;
+            if (keys['ArrowLeft']  || keys['KeyA']) oDx -= 1;
+            if (keys['ArrowRight'] || keys['KeyD']) oDx += 1;
+            if (keys['ArrowUp'])   oDy -= 1;
+            if (keys['ArrowDown']) oDy += 1;
             if (oDx !== 0 || oDy !== 0) {
-                const angle = Math.sqrt(oDx * oDx + oDy * oDy) * 0.015;
-                const axis = new THREE.Vector3(oDy, oDx, 0).normalize();
-                const qOff = new THREE.Quaternion().setFromAxisAngle(axis, angle);
-                cam.quat.multiply(qOff).normalize();
+                cam.orbitYaw -= oDx * ORBIT_KEY_SPEED;
+                cam.orbitPitch = wrapOrbitAngle(cam.orbitPitch + oDy * ORBIT_KEY_SPEED);
             }
 
             const nowOrbit = performance.now();
@@ -2684,19 +3627,24 @@ export class Engine {
             const autoOrbit = window.S.cameraAutoOrbit === true || (window.tour && window.tour.active && !window.transition);
             if (autoOrbit && !userRotating) {
                 const speed = Math.max(-5, Math.min(5, Number(window.S.cameraAutoOrbitSpeed) || 0.22));
-                if (Math.abs(speed) > 0.0001) {
-                    const qAuto = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), speed * dtOrbit);
-                    cam.quat.premultiply(qAuto).normalize();
+                const absSpeed = Math.abs(speed);
+                if (absSpeed > 0.0001) {
+                    const dir = Math.sign(speed || 1);
+                    // Make Auto Orbit travel over the top in the current view
+                    // plane instead of mostly yawing around a perpendicular
+                    // turntable axis. Pitch is the primary motion; yaw is only
+                    // a slow drift so the body still reveals new sides over time.
+                    const pitchStep = dir * Math.max(0.08, absSpeed * 0.78) * dtOrbit;
+                    const yawStep = speed * 0.18 * dtOrbit;
+                    cam.orbitPitch = wrapOrbitAngle(cam.orbitPitch + pitchStep);
+                    cam.orbitYaw = wrapOrbitAngle(cam.orbitYaw + yawStep);
                 }
+            } else if (userRotating) {
+                cam._autoOrbitPitchPhase = undefined;
             }
 
             cam.dist += (cam.distTarget - cam.dist) * 0.12;
-
-            const forward = new THREE.Vector3(0, 0, cam.dist);
-            forward.applyQuaternion(cam.quat);
-            this.camera.position.copy(forward);
-            // Direct quaternion (not lookAt) — gives true 6DOF, no pole-snap.
-            this.camera.quaternion.copy(cam.quat);
+            this._applyOrbitCamera();
         } else {
             // Fly mode (hybrid was removed — never user-exposed).
             const baseSpeed = Math.max(1, cam.pos.length() * 0.005);
@@ -2753,8 +3701,12 @@ export class Engine {
             if (U.audioRms) U.audioRms.value = this._audioPhysicsDrive.rms;
             if (U.audioBeat) U.audioBeat.value = this._audioPhysicsDrive.beat;
         }
+        const zOpt = window.SS_ZOOM_OPT || this.getZoomOptimizationState();
+        const overdrawVisualBudget = this.getOverdrawVisualBudgetState(zOpt);
         U.pointSize.value = v('resolution');
         U.pointOpacity.value = v('opacity');
+        if (U.overdrawParticleScale) U.overdrawParticleScale.value = overdrawVisualBudget.particleScale;
+        if (U.overdrawOpacityScale) U.overdrawOpacityScale.value = overdrawVisualBudget.opacityScale;
         if (U.particleCloseScale) U.particleCloseScale.value = S.particleCloseScale === false ? 0.0 : 1.0;
         if (U.particleCloseScaleStrength) U.particleCloseScaleStrength.value = Math.max(0, Math.min(0.95, Number(S.particleCloseScaleStrength ?? 0.72) || 0));
         if (U.particleCloseScaleNear) U.particleCloseScaleNear.value = Math.max(1, Math.min(200, Number(S.particleCloseScaleNear ?? 20) || 20));
@@ -2784,11 +3736,12 @@ export class Engine {
         if (U.offsetX) U.offsetX.value = S.offsetX + this._visualSwimOffset.x;
         if (U.offsetY) U.offsetY.value = S.offsetY + this._visualSwimOffset.y;
         if (U.offsetZ) U.offsetZ.value = S.offsetZ + this._visualSwimOffset.z;
+        if (U.offscreenCenterLock) U.offscreenCenterLock.value = 0.0;
         if (U.billboardOffset) U.billboardOffset.value = S.billboardOffset;
         if (U.colorMode) U.colorMode.value = S.colorMode || 0;
         if (U.colorRange) U.colorRange.value = v('hue');
         if (U.sat) U.sat.value = v('sat') ?? 0.8;
-        if (U.activeParticleCount) U.activeParticleCount.value = this.getZoomDisplayParticleCount(this.getActiveParticleCount(v('freeEnergy')));
+        if (U.activeParticleCount) U.activeParticleCount.value = this.getFrameDisplayParticleCount(v('freeEnergy'));
         if (U.shape) U.shape.value = S.shape === 'square' ? 1 : (S.shape === 'diamond' ? 2 : 0);
 
         if (this.bgCanvas && v('bgGlow') > 0) {
@@ -2862,6 +3815,7 @@ export class Engine {
     }
 
     saveCameraState() {
+        if (window.SS_OFFSCREEN_SIZE) return;
         if (!this.cam) return;
         const now = performance.now();
         if (!this._lastCamSave || now - this._lastCamSave > 500) {
@@ -2873,6 +3827,8 @@ export class Engine {
                 distTarget: this.cam.distTarget,
                 yaw: this.cam.yaw,
                 pitch: this.cam.pitch,
+                orbitYaw: this.cam.orbitYaw,
+                orbitPitch: this.cam.orbitPitch,
                 flyMoveSpeed: this.cam.flyMoveSpeed,
                 orbitZoomSpeed: this.cam.orbitZoomSpeed
             };
@@ -2957,12 +3913,19 @@ export class Engine {
             performanceParticleScale: window.SS_PARTICLE_SCALE || null,
             zoomOptimizedParticleCount: this.getZoomDisplayParticleCount(active),
             zoom: this.getZoomOptimizationState(),
+            adaptiveReadout: window.SS_PARTICLE_SCALE || null,
             showParticles: window.S?.showParticles !== false,
             opacity: window.S?.opacity,
             resolution: window.S?.resolution,
             meshVisible: !!this.mesh?.visible,
             meshCount: this.mesh?.count ?? 0,
-            compatParticleFallback: !!window.S?.compatParticleFallback,
+            pointDrawMode: this.isGpuPointsMode() ? 'points' : 'native',
+            pointDrawActive: this.isPointDrawActive(),
+            gpuPointVisible: !!this.gpuPointCloud?.visible,
+            gpuPointDrawRange: this.gpuPointCloud?.geometry?.drawRange || null,
+            compatParticleFallback: this.isPointsFallbackActive(),
+            manualCompatParticleFallback: !!window.S?.compatParticleFallback,
+            pointsFallback: window.SS_POINTS_FALLBACK || null,
             compatVisible: !!this.compatParticleCloud?.visible,
             compatCpuMotion: window.S?.compatParticleCpuMotion !== false,
             compatColorPulse: window.S?.compatParticleColorPulse !== false,
@@ -2980,12 +3943,14 @@ export class Engine {
     }
 
     async render() {
-        // Last-resort guard for WebGPU/TSL AttributeNode builds: any helper
-        // mesh/line/points geometry that reaches the renderer gets a safe uv.
-        ensureObjectTreeUvs(this.scene);
         this._perfFrame = ((this._perfFrame || 0) + 1) | 0;
         if ((this._perfFrame & 31) === 0) this.applyPixelRatioIfNeeded(false);
+        this.updatePointDrawState();
         this.updatePerformanceParticleScale();
+        if (this._forcePixelRatioApply) {
+            this._forcePixelRatioApply = false;
+            if (typeof this.applyPixelRatioIfNeeded === 'function') this.applyPixelRatioIfNeeded(true);
+        }
         this.updateUniforms();
         this.updateNavigationArrow();
         this.updateReferenceGrid();
@@ -2997,7 +3962,7 @@ export class Engine {
         // (or oscillator) lift the sim back into motion — it would look stuck.
         const _effTempo = (window.S_effective && typeof window.S_effective.tempo === 'number')
             ? window.S_effective.tempo : window.S.tempo;
-        const skipHiddenGpuCompute = !!(window.S.compatParticleFallback && window.S.compatSkipGpuCompute !== false);
+        const skipHiddenGpuCompute = false;
         if (_effTempo > 0.0 && !skipHiddenGpuCompute) {
             try {
                 // Single fixed-dt physics step per frame (original behavior).
@@ -3014,15 +3979,16 @@ export class Engine {
                 // density-mode bin reads correct values. Two tiny passes: clear
                 // 16 bins, then one atomic tick per particle.
                 const perf = window.SS_PERF || {};
-                const histEvery = Math.max(1, Math.min(30, perf.histEveryFrames || 4));
-                if (this.computeColorHistNode && !window.SS_NO_HIST && (this._perfFrame % histEvery === 0)) {
+                const bgGlowVal = (typeof window.S.bgGlow === 'number') ? window.S.bgGlow : 0.3;
+                const wantsColorHist = (window.S.colorMode || 0) !== 0 && bgGlowVal > 0.02 && window.S.showParticles !== false;
+                const safetyLevel = Math.max(0, Math.min(3, Number(window.SS_ADAPTIVE_CULLING?.level) || 0));
+                const deepZoom = Math.max(0, Math.min(1, Number(window.SS_ZOOM_OPT?.closeUnder50) || 0));
+                const histEvery = Math.max(2, Math.min(30, Math.round((perf.histEveryFrames || 4) + safetyLevel * 4 + deepZoom * 3)));
+                if (wantsColorHist && this.computeColorHistNode && !window.SS_NO_HIST && (this._perfFrame % histEvery === 0)) {
                     await this.renderer.computeAsync(this.computeClearColorHistNode);
                     await this.renderer.computeAsync(this.computeColorHistNode);
-                    // Throttled readback (~1/sec) when the backdrop is showing a
-                    // color mode. Crossfade happens inside sampleColorHistogram.
                     const now = performance.now();
-                    const bgGlowVal = (typeof window.S.bgGlow === 'number') ? window.S.bgGlow : 0.3;
-                    if ((window.S.colorMode || 0) !== 0 && bgGlowVal > 0 && now - (this._lastHistRead || 0) > 900) {
+                    if (now - (this._lastHistRead || 0) > 900) {
                         this._lastHistRead = now;
                         this.sampleColorHistogram(); // fire-and-forget; never awaited
                     }
@@ -3047,39 +4013,40 @@ export class Engine {
         const geometryRibbon = geometryFx && visualStyleHasGeometry(geometryStyle, 'nativeRibbon');
         const geometryLattice = geometryFx && visualStyleHasGeometry(geometryStyle, 'nativeLattice');
         const lineZoom = this.getZoomOptimizationState();
-        const linePressure = Math.max(0, Math.min(1, Number(lineZoom.overdrawPressure) || 0));
-        const fpsInfo = window.SS_FPS || {};
-        const fpsEntropy = Number.isFinite(Number(fpsInfo.entropy)) ? Math.max(0, Math.min(100, Number(fpsInfo.entropy))) : 0;
-        const trailShed = Math.max(0, Math.min(1, (fpsEntropy - 26) / 54));
+        const frameCounts = this.getFrameParticleCounts(window.S.freeEnergy, lineZoom);
+        const frameActiveCount = frameCounts.active;
+        const frameDisplayCount = frameCounts.display;
         const manualTrails = !!(window.S.showRibbons || window.S.tessRibbons || window.S.compatAllowManualStructure === true);
-        const rawLineBoost = Math.round((lineZoom.close || 0) * 6 + linePressure * 9 + trailShed * 14);
-        const lineEveryBoost = manualTrails
-            ? Math.max(0, Math.min(18, rawLineBoost))
-            : Math.max(0, Math.min(24, rawLineBoost));
-        const rawLineVisibleScale = Math.max(0.02, Math.min(1, lineZoom.lineScale || ((lineZoom.activeScale || 1) * (1 - (lineZoom.close || 0) * 0.40))));
-        // If FPS tanks, keep trails alive but aggressively reduce rendered trail particles
-        // and update cadence. This prevents browser-wide stalls from 1M particles + trails.
-        const trailShedScale = Math.max(0.06, 1 - trailShed * 0.82);
-        const lineVisibleScale = Math.max(manualTrails ? 0.07 : 0.02, rawLineVisibleScale * trailShedScale);
-        const lineAlphaScale = (manualTrails ? Math.max(0.30, 1 - linePressure * 0.30) : Math.max(0.22, 1 - linePressure * 0.48)) * Math.max(0.34, 1 - trailShed * 0.58);
+        const trailBudget = this.getTrailBudgetState(lineZoom, manualTrails);
+        const trailAnimationThrottle = this.getTrailAnimationThrottleState(manualTrails);
+        const lineEveryBoost = trailBudget.everyBoost;
+        const lineVisibleScale = trailBudget.visibleScale;
+        const lineAlphaScale = trailBudget.alphaScale;
 
-        const nowCompat = performance.now();
-        const dtCompat = this._lastCompatFrameTime ? (nowCompat - this._lastCompatFrameTime) / 1000 : 0.016;
-        this._lastCompatFrameTime = nowCompat;
-        this.stepCompatParticleSimulation(dtCompat);
-        this.syncCompatParticleCloud(false);
-        this.updateCompatStructureLayers(false);
+        if (this.isPointsFallbackActive()) {
+            const nowCompat = performance.now();
+            const dtCompat = this._lastCompatFrameTime ? (nowCompat - this._lastCompatFrameTime) / 1000 : 0.016;
+            this._lastCompatFrameTime = nowCompat;
+            this.stepCompatParticleSimulation(dtCompat);
+            this.syncCompatParticleCloud(false);
+            this.updateCompatStructureLayers(false);
+        } else {
+            this._lastCompatFrameTime = 0;
+            if (this.compatParticleCloud) this.compatParticleCloud.visible = false;
+            if (this.compatRibbonLayer || this.compatCurveLayer || this.compatCellLayer) this._hideCompatStructureLayers();
+        }
 
         if (this.mesh) {
             const showP = (window.S.showParticles !== false);
             const xfP = (xf && xf.particles !== undefined) ? xf.particles : null;
             const baseAlpha = (xfP !== null) ? xfP : (showP ? 1 : 0);
             const alpha = baseAlpha * envMul;
-            const compatVisible = !!window.S.compatParticleFallback;
-            const shouldRender = alpha > 0.001 && !compatVisible;
+            const pointsVisible = this.isPointDrawActive();
+            const shouldRender = alpha > 0.001 && !pointsVisible;
+            this.syncGpuPointCloud(alpha, frameDisplayCount);
             this.mesh.visible = shouldRender;
             if (shouldRender) {
-                this.mesh.count = this.getZoomDisplayParticleCount(this.getActiveParticleCount(window.S.freeEnergy));
+                this.mesh.count = frameDisplayCount;
             } else {
                 // Belt-and-suspenders: even with mesh.visible=false, zero out
                 // the instance count so no draw call can sneak through if a
@@ -3107,7 +4074,7 @@ export class Engine {
             const xfR = (xf && xf.ribbons !== undefined) ? xf.ribbons : null;
             const baseAlpha = (xfR !== null) ? xfR : (window.S.showRibbons ? 1 : (geometryRibbon ? 0.64 : 0));
             const rawCompatTrailScale = Number(window.S?.compatTrailAlphaScale);
-            const compatTrailScale = (window.S?.compatParticleFallback && window.S?.compatSuppressTrails !== false && !window.S.showRibbons)
+            const compatTrailScale = (this.isPointsFallbackActive() && window.S?.compatSuppressTrails !== false && !window.S.showRibbons)
                 ? (Number.isFinite(rawCompatTrailScale) ? rawCompatTrailScale : 0.0)
                 : 1;
             const alpha = baseAlpha * envMul * compatTrailScale * lineAlphaScale;
@@ -3118,14 +4085,18 @@ export class Engine {
             if (baseOn && this.computeRibbonNode) {
                 const perf = window.SS_PERF || {};
                 const every = Math.max(1, Math.min(22, (perf.ribbonEveryFrames || 1) + lineEveryBoost));
+                const forceTrailFrame = this.ribbonMesh.count === 0;
+                const runTrailFrame = trailAnimationThrottle.enabled
+                    ? this.shouldRunTrailAnimationTick('ribbon', trailAnimationThrottle, forceTrailFrame)
+                    : (this._perfFrame % every === 0 || forceTrailFrame);
                 try {
-                    if (this._perfFrame % every === 0 || this.ribbonMesh.count === 0) {
+                    if (runTrailFrame) {
                         await this.renderer.computeAsync(this.computeRibbonNode);
                     }
-                    const activeN = Math.min(
-                        this.getZoomDisplayParticleCount(this.getActiveParticleCount(window.S.freeEnergy)),
-                        Math.max(2, Math.floor(this._ribbonN * lineVisibleScale)),
-                        this._ribbonN
+                    const activeN = this.getTrailDisplayParticleCount(
+                        Math.min(frameActiveCount, this._ribbonN),
+                        lineVisibleScale,
+                        trailBudget.chunk
                     );
                     this.ribbonMesh.count = Math.max(0, activeN - 1) * this._ribbonS;
                 } catch(e) { console.error('Ribbon error:', e); }
@@ -3142,7 +4113,7 @@ export class Engine {
             const xfL = (xf && xf.lattice !== undefined) ? xf.lattice : null;
             const baseAlpha = (xfL !== null) ? xfL : (window.S.tessRibbons ? 1 : (geometryLattice ? 0.52 : 0));
             const rawCompatLatticeScale = Number(window.S?.compatLatticeAlphaScale);
-            const compatLatticeScale = (window.S?.compatParticleFallback && window.S?.compatSuppressTrails !== false && !window.S.tessRibbons)
+            const compatLatticeScale = (this.isPointsFallbackActive() && window.S?.compatSuppressTrails !== false && !window.S.tessRibbons)
                 ? Math.max(0, Number.isFinite(rawCompatLatticeScale) ? rawCompatLatticeScale : 0.0)
                 : 1;
             const alpha = baseAlpha * envMul * compatLatticeScale * lineAlphaScale;
@@ -3152,14 +4123,18 @@ export class Engine {
             if (baseOn && this.computeLatticeNode) {
                 const perf = window.SS_PERF || {};
                 const every = Math.max(1, Math.min(26, (perf.latticeEveryFrames || 2) + lineEveryBoost));
+                const forceTrailFrame = this.latticeMesh.count === 0;
+                const runTrailFrame = trailAnimationThrottle.enabled
+                    ? this.shouldRunTrailAnimationTick('lattice', trailAnimationThrottle, forceTrailFrame)
+                    : (this._perfFrame % every === 0 || forceTrailFrame);
                 try {
-                    if (this._perfFrame % every === 0 || this.latticeMesh.count === 0) {
+                    if (runTrailFrame) {
                         await this.renderer.computeAsync(this.computeLatticeNode);
                     }
-                    const activeN = Math.min(
-                        this.getZoomDisplayParticleCount(this.getActiveParticleCount(window.S.freeEnergy)),
-                        Math.max(2, Math.floor(this._latticeN * lineVisibleScale)),
-                        this._latticeN
+                    const activeN = this.getTrailDisplayParticleCount(
+                        Math.min(frameActiveCount, this._latticeN),
+                        lineVisibleScale,
+                        trailBudget.chunk
                     );
                     this.latticeMesh.count = Math.max(0, activeN - 1);
                 } catch(e) { console.error('Lattice error:', e); }
@@ -3171,6 +4146,7 @@ export class Engine {
         }
 
         this._updateCamera();
+        this._syncOffscreenViewport(false);
         this.saveCameraState();
 
         try {

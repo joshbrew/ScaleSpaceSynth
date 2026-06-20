@@ -1,9 +1,9 @@
 import { APP_TEXT } from '../core/text.js';
 import {
-    TOUR_STOPPING_KEYS, tour, stopTour, startTour,
+    TOUR_STOPPING_KEYS, tour, stopTour,
     fadeVisibilityKey, fadeColorModeChange, clearVisibilityXfadeForKey,
     VISIBILITY_XFADE_KEYS,
-    travelToHomepoint, captureHomepoint, captureWaypoint, buildAtlasUI
+    travelToHomepoint, captureHomepoint, buildAtlasUI
 } from '../atlas/atlas.js';
 import { exportSaveFile, importSaveFile } from '../persistence/save-file.js';
 import { saveProfile } from '../persistence/profile.js';
@@ -73,6 +73,46 @@ function registerFreeEnergyReadout(fn) {
         });
     };
 }
+
+function compactCount(value) {
+    const n = Math.max(0, Math.round(Number(value) || 0));
+    if (n >= 1000000) return (n / 1000000).toFixed(n >= 10000000 ? 0 : 1) + 'm';
+    if (n >= 1000) return (n / 1000).toFixed(n >= 100000 ? 0 : 1) + 'k';
+    return String(n);
+}
+
+function syncAdaptiveCullingMirrors() {
+    const S = window.S || {};
+    const on = S.adaptiveCulling !== false;
+    S.zoomOverdrawOptimize = on;
+    S.zoomTrailBudgetOptimize = on;
+    if (window.engine?.applyPerfLimits) window.engine.applyPerfLimits();
+    if (window.engine?.updateUniforms) window.engine.updateUniforms();
+}
+
+function syncAnimationModeMirrors(kind) {
+    const S = window.S || {};
+    const apply = (modeKey, throttleKey, fpsKey) => {
+        let mode = String(S[modeKey] || 'auto');
+        if (mode === 'held4' && modeKey === 'backdropAnimationMode') {
+            mode = 'held12';
+            S[modeKey] = mode;
+        }
+        if (mode === 'held4') {
+            S[throttleKey] = true;
+            S[fpsKey] = 4;
+        } else if (mode === 'held12') {
+            S[throttleKey] = true;
+            S[fpsKey] = 12;
+        } else {
+            S[throttleKey] = false;
+            if (!Number.isFinite(Number(S[fpsKey]))) S[fpsKey] = 12;
+        }
+    };
+    if (!kind || kind === 'backdrop') apply('backdropAnimationMode', 'backdropAnimationThrottle', 'backdropAnimationFps');
+    if (!kind || kind === 'trail') apply('trailAnimationMode', 'trailAnimationThrottle', 'trailAnimationFps');
+}
+
 
 	// ─── UI overlay functionality ──────────────────────────────────────────
 
@@ -1058,6 +1098,7 @@ const UNBOUND_NON_NEGATIVE_KEYS = new Set(['freeEnergy', 'resolution']);
 const UNBOUND_ALWAYS_CLAMPED_KEYS = new Set([
     'referenceGrid', 'bgGlow', 'bgBlur', 'uiScanlines', 'screenScanlines',
     'uiZoom', 'panelOpacity', 'perfParticleScaleMin', 'canvasResolutionScale', 'visualEffect2DResolutionScale',
+    'backdropAnimationFps', 'trailAnimationFps',
     'opacity', 'buttonOpacity', 'hue', 'sat'
 ]);
 
@@ -1202,15 +1243,23 @@ function makeSlider(p, label, subhead, ll, lr, key, min, max, step, cb) {
     if (key === 'freeEnergy') {
         registerFreeEnergyReadout((info = {}) => {
             const active = Math.round(Number(info.active) || Number(window.S.freeEnergy) || 0);
+            const displayActive = Math.round(Number(info.displayActive) || active);
             const requested = Math.round(Number(info.requested) || Number(window.S.freeEnergy) || 0);
             const shown = Number(window.S.freeEnergy) || requested || active || 0;
-            const scaled = info.enabled === true && active > 0 && requested > 0 && active < requested;
+            const scaled = info.enabled === true && displayActive > 0 && requested > 0 && displayActive < requested;
             const rawPct = ((shown - min) / (max - min) * 100);
             d.querySelector('i').style.setProperty('--v', Math.max(0, Math.min(100, rawPct)) + '%');
             d.dataset.perfScaled = scaled ? 'true' : 'false';
-            d.title = scaled ? `Adaptive Count rendering ${fmtVal(active)} active of ${fmtVal(requested)} requested` : '';
+            if (scaled) {
+                const fpsText = Number.isFinite(Number(info.fps)) ? ` · ${Math.round(Number(info.fps))}fps` : '';
+                d.title = `Adaptive Count: ${fmtVal(displayActive)} visible, ${fmtVal(active)} active compute, ${fmtVal(requested)} requested${fpsText}`;
+            } else {
+                d.title = '';
+            }
             if (document.activeElement !== valSpan) {
-                valSpan.textContent = fmtVal(shown);
+                valSpan.textContent = scaled
+                    ? `${fmtVal(displayActive)} / ${fmtVal(requested)}`
+                    : fmtVal(shown);
             }
         });
     }
@@ -1584,6 +1633,36 @@ function makeSelect(p, label, subhead, key, options, cb) {
     return d;
 }
 
+
+function refreshToggleKey(key) {
+    const updaters = window._toggleUpdaters && window._toggleUpdaters[key];
+    if (updaters) updaters.forEach(fn => { try { fn(); } catch (e) {} });
+}
+
+function syncParticleDrawModeFromShape() {
+    if (!window.S) return;
+    window.S.perfParticleDrawMode = window.S.shape === 'point' ? 'points' : 'native';
+    if (window.engine?.updatePointDrawState) window.engine.updatePointDrawState();
+    refreshToggleKey('perfParticleDrawMode');
+}
+
+function setParticleDrawMode(mode) {
+    if (!window.S) return;
+    if (mode === 'points') {
+        window.S.shape = 'point';
+        window.S.showParticles = true;
+        window.S.perfParticleDrawMode = 'points';
+    } else {
+        if (window.S.shape === 'point') window.S.shape = 'circle';
+        window.S.perfParticleDrawMode = 'native';
+    }
+    if (window.engine?.updatePointDrawState) window.engine.updatePointDrawState();
+    refreshToggleKey('shape');
+    refreshToggleKey('showParticles');
+    refreshToggleKey('perfParticleDrawMode');
+    if (window.refreshRadialUI) window.refreshRadialUI();
+}
+
 export function makeGroupToggles(p, items) {
     const tb = document.createElement('div');
     tb.className = 'group-toggles';
@@ -1886,6 +1965,13 @@ export function buildUI(engine) {
     makeSlider(pb, c.mass?.label || 'Mass', c.mass?.sub ||'inertia', c.mass?.ll ||'light', c.mass?.lr ||'heavy', 'mass', 0.1, 5, .05);
 
     makeSection(pb, 'Randomizer', 'manual roll / continuous morph');
+    makeSelect(pb, 'RNG Mode', 'continuous/random source', 'randomizerSourceMode', [
+        { value: 'both', label: 'Both' },
+        { value: 'true-random', label: 'True Random' },
+        { value: 'atlas-codes', label: 'Atlas Codes' }
+    ], () => {
+        try { window.dispatchEvent(new CustomEvent('scalespace-randomizer-source-mode')); } catch (e) {}
+    });
     const randomizerFooter = document.createElement('div');
     randomizerFooter.className = 'button-row params-randomizer-footer';
     pb.appendChild(randomizerFooter);
@@ -2008,12 +2094,13 @@ export function buildUI(engine) {
     // the system renders), so "System Opacity" is more honest about scope.
     makeSlider(sb, c.opacity?.label || 'System Opacity', c.opacity?.sub ||'', c.opacity?.ll ||'ghost', c.opacity?.lr ||'solid', 'opacity', 0, 1, .01);
 
-    const quantaT = T.quanta || { label: 'Quanta', items: ['Circle', 'Square', 'Diamond'] };
+    const quantaT = T.quanta || { label: 'Quanta', items: ['Circle', 'Square', 'Diamond', 'Point'] };
     makePilotSection(sb, 'quanta', undefined, ['showParticles', 'shape']);
     makeGroupToggles(sb, [
-        { label: quantaT.items[0], key: 'shape', matchVal: 'circle',  visibilityKey: 'showParticles' },
-        { label: quantaT.items[1], key: 'shape', matchVal: 'square',  visibilityKey: 'showParticles' },
-        { label: quantaT.items[2], key: 'shape', matchVal: 'diamond', visibilityKey: 'showParticles' }
+        { label: quantaT.items[0], key: 'shape', matchVal: 'circle',  visibilityKey: 'showParticles', cb: syncParticleDrawModeFromShape },
+        { label: quantaT.items[1], key: 'shape', matchVal: 'square',  visibilityKey: 'showParticles', cb: syncParticleDrawModeFromShape },
+        { label: quantaT.items[2], key: 'shape', matchVal: 'diamond', visibilityKey: 'showParticles', cb: syncParticleDrawModeFromShape },
+        { label: quantaT.items[3] || 'Point', key: 'shape', matchVal: 'point', visibilityKey: 'showParticles', cb: syncParticleDrawModeFromShape }
     ]);
 
     const trailsT = T.trails || { label: 'Trails', items: ['Strings', 'Lattice'] };
@@ -2431,8 +2518,28 @@ export function buildUI(engine) {
 
         addVisualEffectControls(uiPane, { makeSection, makeSelect, makeSlider, makeGroupToggles, includePowerToggle: true });
 
+        makeSection(uiPane, 'FX Animation Cadence', 'smooth vs held-frame feel');
+        const backdropAnimModeOptions = [
+            { value: 'auto', label: 'Auto' },
+            { value: 'smooth', label: 'Smooth' },
+            { value: 'held12', label: 'Held 12' }
+        ];
+        const trailAnimModeOptions = [
+            { value: 'auto', label: 'Auto' },
+            { value: 'smooth', label: 'Smooth' },
+            { value: 'held12', label: 'Held 12' },
+            { value: 'held4', label: 'Held 4' }
+        ];
+        makeSelect(uiPane, '2D Backdrop Anim', 'auto dips to 12 FPS only', 'backdropAnimationMode', backdropAnimModeOptions, () => syncAnimationModeMirrors('backdrop'));
+        makeSelect(uiPane, 'Trail Anim', 'compute cadence only', 'trailAnimationMode', trailAnimModeOptions, () => syncAnimationModeMirrors('trail'));
+
         makeSlider(uiPane, 'UI Scanlines', '', 'off', 'strong', 'uiScanlines', 0, 0.5, 0.01, () => { applyTheme(); });
         makeSlider(uiPane, 'Screen Scanlines', '', 'off', 'strong', 'screenScanlines', 0, 0.5, 0.01, () => { applyTheme(); });
+
+        makeSection(uiPane, 'HUD', 'small overlays');
+        makeButtonRow(uiPane, [
+            { label: 'FPS Counter', key: 'showFpsCounter', cb: () => { if (window.updateFpsMonitor) window.updateFpsMonitor(); } }
+        ]);
 
         // Reference Grid — wireframe sphere around the simulation that gives
         // spatial bearings. Off by default; raising the slider fades it in.
@@ -2481,7 +2588,11 @@ export function buildUI(engine) {
         makeSlider(systemPane, 'Canvas Scale', 'main render buffer cap', '40%', 'native', 'canvasResolutionScale', 0.4, 1, 0.05, () => {
             if (window.engine?.resize) window.engine.resize(window.innerWidth, window.innerHeight);
         });
+        makeButtonRow(systemPane, [
+            { label: 'FPS Counter', key: 'showFpsCounter', cb: () => { if (window.updateFpsMonitor) window.updateFpsMonitor(); } }
+        ]);
         makeSlider(systemPane, 'Backdrop Detail', '2D FX geometry budget', '25%', '100%', 'visualEffect2DResolutionScale', 0.25, 1, 0.05);
+        makeSlider(systemPane, 'Backdrop Motion', '2D FX drift / shake', 'still', 'alive', 'visualEffect2DBackdropMotion', 0, 1, 0.05);
         makeSlider(systemPane, c.freeEnergy?.label || 'Free Energy', c.freeEnergy?.sub || 'particle count', c.freeEnergy?.ll || 'sparse', c.freeEnergy?.lr || 'dense', 'freeEnergy', 500, 1000000, 100, (val) => {
             if (window.engine) window.engine.resizeParticles(Math.round(val));
         });
@@ -2489,30 +2600,14 @@ export function buildUI(engine) {
             { label: 'Fixed Count', key: 'perfParticleScaling', matchVal: false, cb: () => { if (window.engine?.applyPerfLimits) window.engine.applyPerfLimits(); } },
             { label: 'Adaptive Count', key: 'perfParticleScaling', matchVal: true,  cb: () => { if (window.engine?.applyPerfLimits) window.engine.applyPerfLimits(); } }
         ]);
-        makeSlider(systemPane, 'Particle Floor', '', 'lean', 'full', 'perfParticleScaleMin', 0.25, 1, 0.05, () => {
-            if (window.engine?.applyPerfLimits) window.engine.applyPerfLimits();
-        });
-
-        makeSection(systemPane, 'Close-View Optimization', 'zoom-aware trims');
         makeGroupToggles(systemPane, [
-            { label: 'Full Zoom FX', key: 'zoomOverdrawOptimize', matchVal: false, cb: () => { if (window.engine?.applyPerfLimits) window.engine.applyPerfLimits(); } },
-            { label: 'Close Trim',   key: 'zoomOverdrawOptimize', matchVal: true,  cb: () => { if (window.engine?.applyPerfLimits) window.engine.applyPerfLimits(); } }
+            { label: 'Full Quality', key: 'adaptiveCulling', matchVal: false, cb: syncAdaptiveCullingMirrors },
+            { label: 'Auto Culling', key: 'adaptiveCulling', matchVal: true, cb: syncAdaptiveCullingMirrors }
         ]);
-        makeSlider(systemPane, 'Close Particle Floor', '', 'lean', 'full', 'zoomOverdrawActiveScaleMin', 0.05, 0.8, 0.01, () => {
-            if (window.engine?.applyPerfLimits) window.engine.applyPerfLimits();
-        });
-        makeSlider(systemPane, 'Close FX Floor', '', 'lean', 'full', 'zoomOverdrawEffectScaleMin', 0.15, 0.8, 0.01);
-        makeSlider(systemPane, 'Close Line Floor', '', 'lean', 'full', 'zoomOverdrawLineScaleMin', 0.02, 0.5, 0.005);
         makeGroupToggles(systemPane, [
-            { label: 'Full Close Size', key: 'particleCloseScale', matchVal: false, cb: () => { if (window.engine?.updateUniforms) window.engine.updateUniforms(); } },
-            { label: 'Depth Shrink', key: 'particleCloseScale', matchVal: true, cb: () => { if (window.engine?.updateUniforms) window.engine.updateUniforms(); } }
+            { label: 'Native Quanta', key: 'perfParticleDrawMode', matchVal: 'native', cb: () => { setParticleDrawMode('native'); if (window.engine?.applyPerfLimits) window.engine.applyPerfLimits(); } },
+            { label: 'Point Mode', key: 'perfParticleDrawMode', matchVal: 'points', cb: () => { setParticleDrawMode('points'); if (window.engine?.applyPerfLimits) window.engine.applyPerfLimits(); } }
         ]);
-        makeSlider(systemPane, 'Close Size Damp', '', 'soft', 'tight', 'particleCloseScaleStrength', 0, 0.95, 0.01, () => {
-            if (window.engine?.updateUniforms) window.engine.updateUniforms();
-        });
-        makeSlider(systemPane, 'Close Size Near', '', 'near', 'far', 'particleCloseScaleNear', 1, 120, 1, () => {
-            if (window.engine?.updateUniforms) window.engine.updateUniforms();
-        });
 
         makeSection(systemPane, 'Numeric Bounds', 'binds to slider ranges');
         makeGroupToggles(systemPane, [

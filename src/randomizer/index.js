@@ -75,8 +75,28 @@ const RANDOM_NUMERIC_AUDIO_KEYS = ['audioOscHz', 'audioFxGain'];
 const NUMERIC_AUDIO_KEYS = [...RANDOM_NUMERIC_AUDIO_KEYS, ...AUDIO_REACTIVE_CONTROL_KEYS];
 const AUDIO_PILOT_STATE_KEYS = AUDIO_PILOT_KEYS.map(key => audioPilotStateKey(key));
 const RANDOMIZER_PILOT_STATE_KEYS = AUDIO_PILOT_KEYS.map(key => randomizerPilotStateKey(key));
-const STRING_VISUAL_KEYS = ['compatFlowMode', 'visualEffectStyle', 'visualEffect2DBackdropStyle'];
+const ANIMATION_MODES = ['auto', 'smooth', 'held12', 'held4'];
+const RANDOMIZER_BACKDROP_ANIMATION_MODES = ['smooth', 'smooth', 'smooth', 'held12', 'held12', 'held12'];
+const RANDOMIZER_TRAIL_ANIMATION_MODES = ['smooth', 'smooth', 'smooth', 'held12', 'held12'];
+const STRING_VISUAL_KEYS = ['compatFlowMode', 'visualEffectStyle', 'visualEffect2DBackdropStyle', 'backdropAnimationMode', 'trailAnimationMode'];
 const DISCRETE_KEYS = ['shape', 'colorMode', 'showParticles', 'showRibbons', 'tessRibbons', 'visualEffects', 'visualEffectBackdrop', 'visualEffect2DBackdrop', 'visualEffectPost', 'visualEffectCenterSwim', 'visualEffectNoTrailStyles', 'audioLoop', 'audioMuted', 'audioReactive', 'audioAutoEnableVisuals', 'perfProfile', 'visualEffectRandomize', 'randomizerSourceMode', ...RANDOMIZER_PILOT_STATE_KEYS, ...AUDIO_PILOT_STATE_KEYS];
+// Keys that can flip renderer paths, wake a previously-unused compute pass, or
+// cause lazy WebGPU/TSL pipeline/bind-group builds. Trail/lattice toggles are
+// deliberately excluded because the trail pipelines are warmed at boot; this
+// lets continuous RNG turn trails on/off without hitting a cold compile.
+const RENDER_STRUCTURE_KEYS = [
+    'shape',
+    // Trail/lattice toggles are prewarmed at boot, so continuous RNG can use
+    // them even on the atlas handoff without a cold pipeline compile.
+    'visualEffects',
+    'visualEffectStyle',
+    'visualEffect2DBackdropStyle',
+    'visualEffectBackdrop',
+    'visualEffect2DBackdrop',
+    'visualEffectPost',
+    'compatFlowMode'
+];
+const CONTINUOUS_STABLE_RENDER_KEYS = ['shape'];
 const USER_CONTROLLED_FX_LAYER_KEYS = ['visualEffects', 'visualEffectBackdrop', 'visualEffect2DBackdrop', 'visualEffectPost'];
 const USER_CONTROLLED_AUDIO_MENU_KEYS = [
     ...USER_CONTROLLED_FX_LAYER_KEYS,
@@ -113,6 +133,15 @@ const RANDOMIZER_FX_KEYS = [
     'visualEffectNoTrailStyles'
 ];
 const SNAPSHOT_KEYS = [...NUMERIC_VISUAL_KEYS, ...NUMERIC_AUDIO_KEYS, ...STRING_VISUAL_KEYS, ...DISCRETE_KEYS];
+const RANDOMIZER_SYSTEM_BUDGET_KEYS = [
+    'freeEnergy',
+    'gpuParticleCapacity',
+    'randomizerFreeEnergyCap',
+    'perfProfile',
+    'canvasResolutionScale',
+    'visualEffect2DResolutionScale',
+    'perfParticleScaleMin',
+];
 
 const SHAPES = ['circle', 'square', 'diamond'];
 const COLOR_MODES = [0, 1, 2, 3, 4];
@@ -277,25 +306,9 @@ function _randomizerChaos() {
     return Math.max(0, Math.min(1, Number.isFinite(n) ? n : 0.68));
 }
 
-function _currentFreeEnergyCap() {
-    const s = window.S || {};
-    const explicit = Number(s.randomizerFreeEnergyCap);
-    const current = Number(s.freeEnergy);
-    const capacity = Number(s.gpuParticleCapacity);
-    const vals = [explicit, current, capacity].filter(Number.isFinite).filter(v => v > 0);
-    return vals.length ? Math.max(500, Math.min(...vals)) : Infinity;
-}
-
-function _respectFreeEnergyCap(settings, opts = {}) {
-    if (!settings || !Number.isFinite(Number(settings.freeEnergy))) return settings;
-    // Continuous/random rolls should never silently push the live particle count
-    // above the user/atlas-established cap. If the user deliberately loads an
-    // atlas with a high count, that becomes the visible cap; randomizer drift is
-    // still bounded below that value. Adaptive Count can then downscale live work.
-    if (opts.preserveFreeEnergy === true || opts.continuous === true) {
-        const cap = _currentFreeEnergyCap();
-        if (Number.isFinite(cap)) settings.freeEnergy = Math.min(Number(settings.freeEnergy), cap);
-    }
+function _stripRandomizerSystemBudget(settings) {
+    if (!settings || typeof settings !== 'object') return settings;
+    for (const key of RANDOMIZER_SYSTEM_BUDGET_KEYS) delete settings[key];
     return settings;
 }
 
@@ -496,7 +509,7 @@ export const RANDOMIZER_PRESETS = [
         name: 'Coffee Shop Rain',
         blurb: 'warm window glow, soft rain, laptop hum, tiny trails behaving themselves',
         settings: {
-            freeEnergy: 54000, resolution: 0.82, inversion: 138, halfLife: 22.5, scaleDepth: 2.2,
+            resolution: 0.82, inversion: 138, halfLife: 22.5, scaleDepth: 2.2,
             coherence: 68, equilibrium: 0.012, temperature: 0.34, viscosity: 0.46, mass: 1.15,
             tempo: 0.72, opacity: 0.34, trailLen: 26, hue: 0.105, sat: 0.92, lightness: 0.86,
             bgGlow: 0.42, bgBlur: 135, shape: 'circle', colorMode: 1,
@@ -510,7 +523,7 @@ export const RANDOMIZER_PRESETS = [
         name: 'Thunderhead at 3 AM',
         blurb: 'slow heavy cloud brain, bright rim flashes, everything feels electrically damp',
         settings: {
-            freeEnergy: 124000, resolution: 0.38, inversion: 92, halfLife: 9.2, scaleDepth: 3.0,
+            resolution: 0.38, inversion: 92, halfLife: 9.2, scaleDepth: 3.0,
             coherence: 38, equilibrium: 0.074, temperature: 1.46, viscosity: 0.64, mass: 2.35,
             tempo: 1.28, opacity: 0.31, trailLen: 13, hue: 0.59, sat: 0.74, lightness: 0.72,
             bgGlow: 0.48, bgBlur: 94, shape: 'square', colorMode: 2,
@@ -524,7 +537,7 @@ export const RANDOMIZER_PRESETS = [
         name: 'Monsoon Window',
         blurb: 'water crawling down glass while the room turns blue and sleepy',
         settings: {
-            freeEnergy: 98000, resolution: 0.5, inversion: 74, halfLife: 5.8, scaleDepth: 1.55,
+            resolution: 0.5, inversion: 74, halfLife: 5.8, scaleDepth: 1.55,
             coherence: 26, equilibrium: 0.13, temperature: 0.86, viscosity: 0.72, mass: 2.0,
             tempo: 1.7, opacity: 0.23, trailLen: 9, hue: 0.55, sat: 0.68, lightness: 0.82,
             bgGlow: 0.36, bgBlur: 78, shape: 'circle', colorMode: 2,
@@ -538,7 +551,7 @@ export const RANDOMIZER_PRESETS = [
         name: 'Aurora Highway',
         blurb: 'night drive, cold windshield, green-purple sky doing impossible math',
         settings: {
-            freeEnergy: 112000, resolution: 0.3, inversion: 118, halfLife: 14.5, scaleDepth: 1.2,
+            resolution: 0.3, inversion: 118, halfLife: 14.5, scaleDepth: 1.2,
             coherence: 22, equilibrium: 0.052, temperature: 1.18, viscosity: 0.08, mass: 0.35,
             tempo: 1.9, opacity: 0.18, trailLen: 18, hue: 0.38, sat: 1.45, lightness: 1.02,
             bgGlow: 0.72, bgBlur: 118, shape: 'circle', colorMode: 3,
@@ -552,7 +565,7 @@ export const RANDOMIZER_PRESETS = [
         name: 'Radio Tower Fog',
         blurb: 'red blinking antenna through soup-thick fog, low frequency nonsense nearby',
         settings: {
-            freeEnergy: 47000, resolution: 2.2, inversion: 318, halfLife: 28, scaleDepth: 4.4,
+            resolution: 2.2, inversion: 318, halfLife: 28, scaleDepth: 4.4,
             coherence: 156, equilibrium: 0.004, temperature: 0.18, viscosity: 0.78, mass: 2.8,
             tempo: 0.28, opacity: 0.52, trailLen: 30, hue: 0.0, sat: 0.82, lightness: 0.78,
             bgGlow: 0.3, bgBlur: 180, shape: 'diamond', colorMode: 0,
@@ -566,7 +579,7 @@ export const RANDOMIZER_PRESETS = [
         name: 'Aquarium at Midnight',
         blurb: 'fish tank glow in a dark room, tiny organisms commuting with purpose',
         settings: {
-            freeEnergy: 68000, resolution: 0.45, inversion: 84, halfLife: 19, scaleDepth: 1.7,
+            resolution: 0.45, inversion: 84, halfLife: 19, scaleDepth: 1.7,
             coherence: 31, equilibrium: 0.02, temperature: 0.46, viscosity: 0.18, mass: 0.48,
             tempo: 1.08, opacity: 0.27, trailLen: 25, hue: 0.49, sat: 1.28, lightness: 0.96,
             bgGlow: 0.56, bgBlur: 96, shape: 'circle', colorMode: 3,
@@ -580,7 +593,7 @@ export const RANDOMIZER_PRESETS = [
         name: 'Campfire CRT',
         blurb: 'old TV warmth, orange coals, comforting phosphor ghosts in the corner',
         settings: {
-            freeEnergy: 39000, resolution: 1.35, inversion: 188, halfLife: 26, scaleDepth: 2.9,
+            resolution: 1.35, inversion: 188, halfLife: 26, scaleDepth: 2.9,
             coherence: 104, equilibrium: 0.008, temperature: 0.62, viscosity: 0.34, mass: 1.05,
             tempo: 0.58, opacity: 0.43, trailLen: 30, hue: 0.075, sat: 1.2, lightness: 0.84,
             bgGlow: 0.5, bgBlur: 142, shape: 'square', colorMode: 1,
@@ -594,7 +607,7 @@ export const RANDOMIZER_PRESETS = [
         name: 'Lava Lamp Thesis',
         blurb: 'procrastination object, but scientifically defensible if anyone asks',
         settings: {
-            freeEnergy: 52000, resolution: 2.8, inversion: 330, halfLife: 30, scaleDepth: 3.7,
+            resolution: 2.8, inversion: 330, halfLife: 30, scaleDepth: 3.7,
             coherence: 148, equilibrium: 0.003, temperature: 0.28, viscosity: 0.88, mass: 1.6,
             tempo: 0.22, opacity: 0.58, trailLen: 29, hue: 0.87, sat: 1.05, lightness: 0.98,
             bgGlow: 0.68, bgBlur: 168, shape: 'circle', colorMode: 0,
@@ -608,7 +621,7 @@ export const RANDOMIZER_PRESETS = [
         name: 'Museum After Dark',
         blurb: 'quiet glass cases, laser tripwires, something ancient maybe blinking',
         settings: {
-            freeEnergy: 33000, resolution: 3.6, inversion: 390, halfLife: 30, scaleDepth: 4.7,
+            resolution: 3.6, inversion: 390, halfLife: 30, scaleDepth: 4.7,
             coherence: 178, equilibrium: 0.002, temperature: 0.08, viscosity: 0.83, mass: 2.1,
             tempo: 0.16, opacity: 0.62, trailLen: 30, hue: 0.66, sat: 0.82, lightness: 1.12,
             bgGlow: 0.42, bgBlur: 105, shape: 'diamond', colorMode: 1,
@@ -622,7 +635,7 @@ export const RANDOMIZER_PRESETS = [
         name: 'Subway Dream',
         blurb: 'late train lights sliding by, mild dread, strangely beautiful compression artifacts',
         settings: {
-            freeEnergy: 87000, resolution: 0.58, inversion: 156, halfLife: 12.5, scaleDepth: 2.1,
+            resolution: 0.58, inversion: 156, halfLife: 12.5, scaleDepth: 2.1,
             coherence: 44, equilibrium: 0.047, temperature: 0.9, viscosity: 0.28, mass: 1.4,
             tempo: 1.36, opacity: 0.3, trailLen: 20, hue: 0.72, sat: 1.05, lightness: 0.82,
             bgGlow: 0.34, bgBlur: 82, shape: 'square', colorMode: 2,
@@ -636,7 +649,7 @@ export const RANDOMIZER_PRESETS = [
         name: 'Jellyfish Cathedral',
         blurb: 'soft bells drifting through stained glass water, blessed nonsense',
         settings: {
-            freeEnergy: 76000, resolution: 0.72, inversion: 206, halfLife: 24, scaleDepth: 3.0,
+            resolution: 0.72, inversion: 206, halfLife: 24, scaleDepth: 3.0,
             coherence: 58, equilibrium: 0.018, temperature: 0.5, viscosity: 0.3, mass: 0.72,
             tempo: 0.92, opacity: 0.22, trailLen: 30, hue: 0.78, sat: 1.36, lightness: 1.04,
             bgGlow: 0.78, bgBlur: 170, shape: 'circle', colorMode: 3,
@@ -650,7 +663,7 @@ export const RANDOMIZER_PRESETS = [
         name: 'Firefly Swamp',
         blurb: 'summer mud, blinking bugs, warm green chaos that somehow calms down',
         settings: {
-            freeEnergy: 92000, resolution: 0.34, inversion: 104, halfLife: 8.8, scaleDepth: 0.85,
+            resolution: 0.34, inversion: 104, halfLife: 8.8, scaleDepth: 0.85,
             coherence: 18, equilibrium: 0.082, temperature: 1.15, viscosity: 0.16, mass: 0.38,
             tempo: 1.65, opacity: 0.17, trailLen: 12, hue: 0.28, sat: 1.46, lightness: 0.94,
             bgGlow: 0.62, bgBlur: 88, shape: 'circle', colorMode: 2,
@@ -664,7 +677,7 @@ export const RANDOMIZER_PRESETS = [
         name: 'Glass Beehive',
         blurb: 'organized panic, hex logic, tiny workers doing GPU logistics',
         settings: {
-            freeEnergy: 142000, resolution: 0.24, inversion: 128, halfLife: 5.4, scaleDepth: 0.72,
+            resolution: 0.24, inversion: 128, halfLife: 5.4, scaleDepth: 0.72,
             coherence: 12, equilibrium: 0.104, temperature: 1.58, viscosity: 0.06, mass: 0.28,
             tempo: 2.3, opacity: 0.14, trailLen: 7, hue: 0.13, sat: 1.42, lightness: 0.96,
             bgGlow: 0.5, bgBlur: 42, shape: 'diamond', colorMode: 2,
@@ -678,7 +691,7 @@ export const RANDOMIZER_PRESETS = [
         name: 'Witch Hazel Bloom',
         blurb: 'winter flowers with spidery yellow logic, medicinal goblin garden',
         settings: {
-            freeEnergy: 61000, resolution: 0.94, inversion: 248, halfLife: 20.5, scaleDepth: 2.65,
+            resolution: 0.94, inversion: 248, halfLife: 20.5, scaleDepth: 2.65,
             coherence: 76, equilibrium: 0.016, temperature: 0.38, viscosity: 0.4, mass: 0.78,
             tempo: 0.82, opacity: 0.33, trailLen: 25, hue: 0.15, sat: 1.18, lightness: 0.9,
             bgGlow: 0.44, bgBlur: 132, shape: 'diamond', colorMode: 1,
@@ -692,7 +705,7 @@ export const RANDOMIZER_PRESETS = [
         name: 'Blue Hour Orchard',
         blurb: 'fruit trees after sunset, cool air, pollinator ghosts punching out',
         settings: {
-            freeEnergy: 72000, resolution: 0.68, inversion: 176, halfLife: 18.8, scaleDepth: 2.35,
+            resolution: 0.68, inversion: 176, halfLife: 18.8, scaleDepth: 2.35,
             coherence: 54, equilibrium: 0.021, temperature: 0.52, viscosity: 0.22, mass: 0.68,
             tempo: 1.02, opacity: 0.25, trailLen: 23, hue: 0.57, sat: 0.96, lightness: 0.92,
             bgGlow: 0.52, bgBlur: 146, shape: 'circle', colorMode: 3,
@@ -706,7 +719,7 @@ export const RANDOMIZER_PRESETS = [
         name: 'Neon Noodle Shop',
         blurb: 'rainy alley, hot broth, pink-blue sign buzzing like it has opinions',
         settings: {
-            freeEnergy: 118000, resolution: 0.22, inversion: 96, halfLife: 7.6, scaleDepth: 0.42,
+            resolution: 0.22, inversion: 96, halfLife: 7.6, scaleDepth: 0.42,
             coherence: 10, equilibrium: 0.092, temperature: 1.76, viscosity: 0.05, mass: 0.2,
             tempo: 2.1, opacity: 0.16, trailLen: 9, hue: 0.88, sat: 1.5, lightness: 1.05,
             bgGlow: 0.74, bgBlur: 64, shape: 'circle', colorMode: 2,
@@ -720,7 +733,7 @@ export const RANDOMIZER_PRESETS = [
         name: 'Arcade Carpet',
         blurb: 'galaxy pattern floor, sticky shoes, every color guilty of a crime',
         settings: {
-            freeEnergy: 154000, resolution: 0.18, inversion: 116, halfLife: 4.6, scaleDepth: 0.22,
+            resolution: 0.18, inversion: 116, halfLife: 4.6, scaleDepth: 0.22,
             coherence: 7, equilibrium: 0.14, temperature: 2.45, viscosity: 0.02, mass: 0.14,
             tempo: 3.0, opacity: 0.12, trailLen: 5, hue: 0.31, sat: 1.5, lightness: 1.1,
             bgGlow: 0.58, bgBlur: 36, shape: 'circle', colorMode: 3,
@@ -734,7 +747,7 @@ export const RANDOMIZER_PRESETS = [
         name: 'Mall Fountain 1998',
         blurb: 'quarter wishes, chlorine nostalgia, skylight beams hitting fake marble',
         settings: {
-            freeEnergy: 69000, resolution: 1.1, inversion: 216, halfLife: 23, scaleDepth: 2.6,
+            resolution: 1.1, inversion: 216, halfLife: 23, scaleDepth: 2.6,
             coherence: 82, equilibrium: 0.01, temperature: 0.26, viscosity: 0.54, mass: 1.0,
             tempo: 0.64, opacity: 0.4, trailLen: 28, hue: 0.52, sat: 0.86, lightness: 1.0,
             bgGlow: 0.5, bgBlur: 150, shape: 'circle', colorMode: 1,
@@ -748,7 +761,7 @@ export const RANDOMIZER_PRESETS = [
         name: 'Parking Lot UFO',
         blurb: 'grocery store sodium lights, wet asphalt, one suspicious hovering pancake',
         settings: {
-            freeEnergy: 102000, resolution: 0.46, inversion: 250, halfLife: 14, scaleDepth: 3.25,
+            resolution: 0.46, inversion: 250, halfLife: 14, scaleDepth: 3.25,
             coherence: 48, equilibrium: 0.034, temperature: 0.88, viscosity: 0.22, mass: 0.9,
             tempo: 1.34, opacity: 0.28, trailLen: 18, hue: 0.19, sat: 1.18, lightness: 0.78,
             bgGlow: 0.46, bgBlur: 110, shape: 'diamond', colorMode: 3,
@@ -762,7 +775,7 @@ export const RANDOMIZER_PRESETS = [
         name: 'Server Room Snowglobe',
         blurb: 'cold aisle snowfall, rack fans, tiny packets shaking loose in blue light',
         settings: {
-            freeEnergy: 134000, resolution: 0.26, inversion: 68, halfLife: 6.4, scaleDepth: 0.35,
+            resolution: 0.26, inversion: 68, halfLife: 6.4, scaleDepth: 0.35,
             coherence: 11, equilibrium: 0.118, temperature: 0.74, viscosity: 0.04, mass: 0.22,
             tempo: 2.45, opacity: 0.13, trailLen: 8, hue: 0.61, sat: 1.18, lightness: 1.12,
             bgGlow: 0.64, bgBlur: 52, shape: 'square', colorMode: 2,
@@ -776,7 +789,7 @@ export const RANDOMIZER_PRESETS = [
         name: 'Ancient Circuit Board',
         blurb: 'copper traces pretending to be ley lines, dusty but still booting',
         settings: {
-            freeEnergy: 48000, resolution: 1.8, inversion: 300, halfLife: 28, scaleDepth: 4.0,
+            resolution: 1.8, inversion: 300, halfLife: 28, scaleDepth: 4.0,
             coherence: 126, equilibrium: 0.005, temperature: 0.2, viscosity: 0.66, mass: 1.9,
             tempo: 0.38, opacity: 0.52, trailLen: 30, hue: 0.22, sat: 0.98, lightness: 0.82,
             bgGlow: 0.36, bgBlur: 122, shape: 'diamond', colorMode: 1,
@@ -790,7 +803,7 @@ export const RANDOMIZER_PRESETS = [
         name: 'Ham Radio Moonbounce',
         blurb: 'garage antenna magic, signal leaves earth and comes back slightly haunted',
         settings: {
-            freeEnergy: 79000, resolution: 0.52, inversion: 178, halfLife: 16, scaleDepth: 2.7,
+            resolution: 0.52, inversion: 178, halfLife: 16, scaleDepth: 2.7,
             coherence: 37, equilibrium: 0.044, temperature: 0.72, viscosity: 0.14, mass: 0.62,
             tempo: 1.55, opacity: 0.22, trailLen: 17, hue: 0.64, sat: 1.25, lightness: 0.98,
             bgGlow: 0.42, bgBlur: 76, shape: 'circle', colorMode: 2,
@@ -804,7 +817,7 @@ export const RANDOMIZER_PRESETS = [
         name: 'Printer Jam Singularity',
         blurb: 'office machine anger becomes a small local cosmological event',
         settings: {
-            freeEnergy: 176000, resolution: 0.16, inversion: 58, halfLife: 3.2, scaleDepth: 0.18,
+            resolution: 0.16, inversion: 58, halfLife: 3.2, scaleDepth: 0.18,
             coherence: 5, equilibrium: 0.165, temperature: 2.6, viscosity: 0.01, mass: 0.12,
             tempo: 3.2, opacity: 0.1, trailLen: 4, hue: 0.02, sat: 1.5, lightness: 0.98,
             bgGlow: 0.38, bgBlur: 28, shape: 'square', colorMode: 2,
@@ -818,7 +831,7 @@ export const RANDOMIZER_PRESETS = [
         name: 'Elevator to Orbit',
         blurb: 'office elevator opens into starfield, nobody in the lobby seems concerned',
         settings: {
-            freeEnergy: 86000, resolution: 0.9, inversion: 260, halfLife: 21, scaleDepth: 3.9,
+            resolution: 0.9, inversion: 260, halfLife: 21, scaleDepth: 3.9,
             coherence: 72, equilibrium: 0.018, temperature: 0.52, viscosity: 0.24, mass: 0.85,
             tempo: 0.88, opacity: 0.36, trailLen: 26, hue: 0.72, sat: 1.12, lightness: 0.9,
             bgGlow: 0.58, bgBlur: 160, shape: 'diamond', colorMode: 3,
@@ -832,7 +845,7 @@ export const RANDOMIZER_PRESETS = [
         name: 'Black Hole Laundry',
         blurb: 'dryer vortex, missing socks, gravity lens with a lint trap',
         settings: {
-            freeEnergy: 91000, resolution: 1.4, inversion: 372, halfLife: 27.5, scaleDepth: 4.85,
+            resolution: 1.4, inversion: 372, halfLife: 27.5, scaleDepth: 4.85,
             coherence: 154, equilibrium: 0.003, temperature: 0.16, viscosity: 0.74, mass: 3.8,
             tempo: 0.28, opacity: 0.56, trailLen: 22, hue: 0.76, sat: 0.82, lightness: 0.72,
             bgGlow: 0.24, bgBlur: 156, shape: 'square', colorMode: 0,
@@ -846,7 +859,7 @@ export const RANDOMIZER_PRESETS = [
         name: 'Satellite Beach',
         blurb: 'night shore, tide noise, orbital debris glittering like vacation LEDs',
         settings: {
-            freeEnergy: 73000, resolution: 0.66, inversion: 190, halfLife: 17.6, scaleDepth: 2.4,
+            resolution: 0.66, inversion: 190, halfLife: 17.6, scaleDepth: 2.4,
             coherence: 46, equilibrium: 0.027, temperature: 0.66, viscosity: 0.2, mass: 0.7,
             tempo: 1.16, opacity: 0.26, trailLen: 21, hue: 0.54, sat: 1.05, lightness: 0.94,
             bgGlow: 0.52, bgBlur: 128, shape: 'circle', colorMode: 3,
@@ -860,7 +873,7 @@ export const RANDOMIZER_PRESETS = [
         name: 'Comet Tail Static',
         blurb: 'fast ice, long smear, radio snow from something you cannot pronounce',
         settings: {
-            freeEnergy: 146000, resolution: 0.21, inversion: 82, halfLife: 5.0, scaleDepth: 0.48,
+            resolution: 0.21, inversion: 82, halfLife: 5.0, scaleDepth: 0.48,
             coherence: 9, equilibrium: 0.132, temperature: 2.05, viscosity: 0.03, mass: 0.18,
             tempo: 2.75, opacity: 0.13, trailLen: 6, hue: 0.62, sat: 1.42, lightness: 1.08,
             bgGlow: 0.7, bgBlur: 48, shape: 'circle', colorMode: 2,
@@ -874,7 +887,7 @@ export const RANDOMIZER_PRESETS = [
         name: 'Garden Hose Galaxy',
         blurb: 'backyard spiral arms, sprinkler mist, Milky Way but with weeds',
         settings: {
-            freeEnergy: 82000, resolution: 0.76, inversion: 222, halfLife: 22, scaleDepth: 3.15,
+            resolution: 0.76, inversion: 222, halfLife: 22, scaleDepth: 3.15,
             coherence: 64, equilibrium: 0.019, temperature: 0.78, viscosity: 0.25, mass: 0.82,
             tempo: 1.0, opacity: 0.32, trailLen: 27, hue: 0.45, sat: 1.2, lightness: 0.96,
             bgGlow: 0.62, bgBlur: 142, shape: 'circle', colorMode: 3,
@@ -888,7 +901,7 @@ export const RANDOMIZER_PRESETS = [
         name: 'Deep Sea Sonar',
         blurb: 'black water, one ping, ancient machines below deciding whether to answer',
         settings: {
-            freeEnergy: 44000, resolution: 3.1, inversion: 404, halfLife: 29, scaleDepth: 4.6,
+            resolution: 3.1, inversion: 404, halfLife: 29, scaleDepth: 4.6,
             coherence: 168, equilibrium: 0.002, temperature: 0.1, viscosity: 0.86, mass: 3.4,
             tempo: 0.14, opacity: 0.5, trailLen: 30, hue: 0.58, sat: 0.72, lightness: 0.8,
             bgGlow: 0.26, bgBlur: 175, shape: 'circle', colorMode: 0,
@@ -902,7 +915,7 @@ export const RANDOMIZER_PRESETS = [
         name: 'Moonlit Pool',
         blurb: 'still backyard water, silver ripples, almost too calm to trust',
         settings: {
-            freeEnergy: 36000, resolution: 2.6, inversion: 348, halfLife: 30, scaleDepth: 4.2,
+            resolution: 2.6, inversion: 348, halfLife: 30, scaleDepth: 4.2,
             coherence: 144, equilibrium: 0.004, temperature: 0.14, viscosity: 0.76, mass: 1.8,
             tempo: 0.24, opacity: 0.46, trailLen: 30, hue: 0.62, sat: 0.58, lightness: 1.1,
             bgGlow: 0.44, bgBlur: 165, shape: 'circle', colorMode: 0,
@@ -916,7 +929,7 @@ export const RANDOMIZER_PRESETS = [
         name: 'Desert Mirage',
         blurb: 'heat shimmer at the horizon, pale gold math pretending to be water',
         settings: {
-            freeEnergy: 59000, resolution: 1.5, inversion: 286, halfLife: 24, scaleDepth: 3.5,
+            resolution: 1.5, inversion: 286, halfLife: 24, scaleDepth: 3.5,
             coherence: 96, equilibrium: 0.008, temperature: 1.38, viscosity: 0.52, mass: 1.2,
             tempo: 0.46, opacity: 0.39, trailLen: 24, hue: 0.11, sat: 0.98, lightness: 0.98,
             bgGlow: 0.5, bgBlur: 178, shape: 'diamond', colorMode: 1,
@@ -930,7 +943,7 @@ export const RANDOMIZER_PRESETS = [
         name: 'Phantom Icebox',
         blurb: 'kitchen fridge hum at midnight, blue cold, probably not haunted, probably',
         settings: {
-            freeEnergy: 42000, resolution: 3.9, inversion: 398, halfLife: 29.5, scaleDepth: 4.4,
+            resolution: 3.9, inversion: 398, halfLife: 29.5, scaleDepth: 4.4,
             coherence: 160, equilibrium: 0.003, temperature: 0.04, viscosity: 0.88, mass: 2.4,
             tempo: 0.18, opacity: 0.44, trailLen: 30, hue: 0.57, sat: 0.62, lightness: 1.12,
             bgGlow: 0.34, bgBlur: 172, shape: 'square', colorMode: 0,
@@ -944,7 +957,7 @@ export const RANDOMIZER_PRESETS = [
         name: 'Red Giant Kitchen Light',
         blurb: 'oven preheat energy, red star swelling, dinner may be cosmological',
         settings: {
-            freeEnergy: 96000, resolution: 0.7, inversion: 236, halfLife: 12, scaleDepth: 2.4,
+            resolution: 0.7, inversion: 236, halfLife: 12, scaleDepth: 2.4,
             coherence: 62, equilibrium: 0.037, temperature: 2.18, viscosity: 0.16, mass: 0.92,
             tempo: 1.58, opacity: 0.44, trailLen: 17, hue: 0.02, sat: 1.38, lightness: 0.82,
             bgGlow: 0.66, bgBlur: 100, shape: 'circle', colorMode: 3,
@@ -958,7 +971,7 @@ export const RANDOMIZER_PRESETS = [
         name: 'Volcano Snow',
         blurb: 'ash and sparks mixing with impossible cold, geology doing theater',
         settings: {
-            freeEnergy: 128000, resolution: 0.33, inversion: 108, halfLife: 7.2, scaleDepth: 1.15,
+            resolution: 0.33, inversion: 108, halfLife: 7.2, scaleDepth: 1.15,
             coherence: 21, equilibrium: 0.088, temperature: 2.35, viscosity: 0.18, mass: 1.0,
             tempo: 2.0, opacity: 0.2, trailLen: 10, hue: 0.01, sat: 1.44, lightness: 0.92,
             bgGlow: 0.62, bgBlur: 72, shape: 'circle', colorMode: 2,
@@ -972,7 +985,7 @@ export const RANDOMIZER_PRESETS = [
         name: 'Honeycomb Engine',
         blurb: 'warm mechanical sweetness, bees invented a turbine and refused peer review',
         settings: {
-            freeEnergy: 105000, resolution: 0.4, inversion: 154, halfLife: 10.4, scaleDepth: 1.65,
+            resolution: 0.4, inversion: 154, halfLife: 10.4, scaleDepth: 1.65,
             coherence: 34, equilibrium: 0.058, temperature: 1.24, viscosity: 0.22, mass: 0.7,
             tempo: 1.85, opacity: 0.25, trailLen: 14, hue: 0.13, sat: 1.36, lightness: 0.86,
             bgGlow: 0.58, bgBlur: 68, shape: 'diamond', colorMode: 2,
@@ -986,7 +999,7 @@ export const RANDOMIZER_PRESETS = [
         name: 'Toaster Fire Drill',
         blurb: 'breakfast crossed the event horizon, chaotic but survivable',
         settings: {
-            freeEnergy: 166000, resolution: 0.19, inversion: 64, halfLife: 3.6, scaleDepth: 0.2,
+            resolution: 0.19, inversion: 64, halfLife: 3.6, scaleDepth: 0.2,
             coherence: 6, equilibrium: 0.152, temperature: 2.7, viscosity: 0.02, mass: 0.16,
             tempo: 3.15, opacity: 0.11, trailLen: 5, hue: 0.05, sat: 1.5, lightness: 0.9,
             bgGlow: 0.5, bgBlur: 32, shape: 'square', colorMode: 2,
@@ -1000,7 +1013,7 @@ export const RANDOMIZER_PRESETS = [
         name: 'Ghost Bloom',
         blurb: 'pale bloom, soft disappearance, the system politely becoming a rumor',
         settings: {
-            freeEnergy: 58000, resolution: 4.8, inversion: 410, halfLife: 26.2, scaleDepth: 3.6,
+            resolution: 4.8, inversion: 410, halfLife: 26.2, scaleDepth: 3.6,
             coherence: 112, equilibrium: 0.006, temperature: 0.38, viscosity: 0.55, mass: 0.55,
             tempo: 0.58, opacity: 0.09, trailLen: 22, hue: 0.9, sat: 0.42, lightness: 1.14,
             bgGlow: 0.46, bgBlur: 180, shape: 'circle', colorMode: 0,
@@ -1014,7 +1027,7 @@ export const RANDOMIZER_PRESETS = [
         name: 'Amber Lattice',
         blurb: 'clean amber geometry, like a fossilized circuit board in nice lighting',
         settings: {
-            freeEnergy: 42000, resolution: 0.65, inversion: 145, halfLife: 24.5, scaleDepth: 2.8,
+            resolution: 0.65, inversion: 145, halfLife: 24.5, scaleDepth: 2.8,
             coherence: 88, equilibrium: 0.009, temperature: 0.24, viscosity: 0.38, mass: 1.35,
             tempo: 0.72, opacity: 0.38, trailLen: 30, hue: 0.1, sat: 1.12, lightness: 0.88,
             bgGlow: 0.36, bgBlur: 126, shape: 'diamond', colorMode: 1,
@@ -1028,7 +1041,7 @@ export const RANDOMIZER_PRESETS = [
         name: 'Cold Plasma',
         blurb: 'blue-white bite, ionized sparkle, fast enough to wake the debugger',
         settings: {
-            freeEnergy: 118000, resolution: 0.24, inversion: 70, halfLife: 8.5, scaleDepth: 0.55,
+            resolution: 0.24, inversion: 70, halfLife: 8.5, scaleDepth: 0.55,
             coherence: 12, equilibrium: 0.065, temperature: 1.75, viscosity: 0.04, mass: 0.18,
             tempo: 2.35, opacity: 0.16, trailLen: 11, hue: 0.61, sat: 1.42, lightness: 1.08,
             bgGlow: 0.68, bgBlur: 58, shape: 'circle', colorMode: 2,
@@ -1042,7 +1055,7 @@ export const RANDOMIZER_PRESETS = [
         name: 'Nebula Thread',
         blurb: 'purple threadwork, enough cosmic mist to be suspiciously pretty',
         settings: {
-            freeEnergy: 76000, resolution: 0.95, inversion: 204, halfLife: 21, scaleDepth: 3.25,
+            resolution: 0.95, inversion: 204, halfLife: 21, scaleDepth: 3.25,
             coherence: 52, equilibrium: 0.022, temperature: 0.85, viscosity: 0.24, mass: 0.72,
             tempo: 1.42, opacity: 0.31, trailLen: 28, hue: 0.82, sat: 1.34, lightness: 0.92,
             bgGlow: 0.74, bgBlur: 172, shape: 'diamond', colorMode: 3,
@@ -1111,6 +1124,44 @@ function _rand() {
 
 function _pick(arr) {
     return arr[Math.floor(_rand() * arr.length) % arr.length];
+}
+
+function _syncAnimationModeMirror(settings, key) {
+    if (!settings || typeof settings !== 'object') return settings;
+    const modeKey = key === 'backdrop' ? 'backdropAnimationMode' : 'trailAnimationMode';
+    const throttleKey = key === 'backdrop' ? 'backdropAnimationThrottle' : 'trailAnimationThrottle';
+    const fpsKey = key === 'backdrop' ? 'backdropAnimationFps' : 'trailAnimationFps';
+    let mode = ANIMATION_MODES.includes(settings[modeKey]) ? settings[modeKey] : 'auto';
+    if (key === 'backdrop' && mode === 'held4') mode = 'held12';
+    settings[modeKey] = mode;
+    if (mode === 'held4') {
+        settings[throttleKey] = true;
+        settings[fpsKey] = 4;
+    } else if (mode === 'held12') {
+        settings[throttleKey] = true;
+        settings[fpsKey] = 12;
+    } else {
+        settings[throttleKey] = false;
+        settings[fpsKey] = 12;
+    }
+    return settings;
+}
+
+function _pickRandomizerAnimationMode(kind = 'backdrop') {
+    const pool = kind === 'trail' ? RANDOMIZER_TRAIL_ANIMATION_MODES : RANDOMIZER_BACKDROP_ANIMATION_MODES;
+    return _pick(pool);
+}
+
+function _applyRandomizerAnimationModes(settings, opts = {}) {
+    if (!settings || typeof settings !== 'object') return settings;
+    if (opts.includeVisuals === false) return settings;
+    settings.backdropAnimationMode = _pickRandomizerAnimationMode('backdrop');
+    // Trail 4 FPS is an internal auto/performance-saver only. RNG styles use
+    // smooth or 12 FPS so the trail look does not become too choppy by choice.
+    settings.trailAnimationMode = _pickRandomizerAnimationMode('trail');
+    _syncAnimationModeMirror(settings, 'backdrop');
+    _syncAnimationModeMirror(settings, 'trail');
+    return settings;
 }
 
 function _roundToStep(v, step) {
@@ -1198,9 +1249,23 @@ function _syncKeys(keys) {
     try { if (window.refreshRadialUI) window.refreshRadialUI(); } catch (e) { console.error(e); }
 }
 
+function _isRandomizerDriven(opts = {}) {
+    const source = String(opts.source || '');
+    return opts.continuous === true ||
+        opts.applyAtlasWaypointState === true ||
+        source === 'randomizer' ||
+        source === 'atlas-randomizer' ||
+        source === 'continuous' ||
+        source === 'continuous-atlas';
+}
+
 function _applyEngineSideEffects(changed, opts = {}) {
     const resize = opts.resize !== false;
     const reinitialize = opts.reinitialize !== false;
+    const randomizerDriven = _isRandomizerDriven(opts);
+    const skipParticleResize = opts.skipParticleResize === true || randomizerDriven;
+    const applyPerfProfile = opts.applyPerfProfile !== false;
+    const applyPerformanceDefaults = opts.applyPerformanceDefaults === true && !randomizerDriven;
 
     const bgGlow = document.getElementById('bgGlow');
     if (bgGlow) {
@@ -1208,8 +1273,8 @@ function _applyEngineSideEffects(changed, opts = {}) {
         if (changed.has('bgBlur')) bgGlow.style.filter = 'blur(' + (window.S.bgBlur || 0) + 'px)';
     }
 
-    if (changed.has('perfProfile')) {
-        try { setPerformanceProfile(window.S.perfProfile || 'balanced'); } catch (e) { console.error(e); }
+    if (applyPerfProfile && changed.has('perfProfile')) {
+        try { setPerformanceProfile(window.S.perfProfile || 'balanced', { applyDefaults: applyPerformanceDefaults }); } catch (e) { console.error(e); }
     }
 
     const engine = window.engine;
@@ -1219,7 +1284,7 @@ function _applyEngineSideEffects(changed, opts = {}) {
         try { engine.resize(window.innerWidth, window.innerHeight); } catch (e) { console.error(e); }
     }
 
-    if (resize && changed.has('freeEnergy') && typeof engine.resizeParticles === 'function') {
+    if (resize && !skipParticleResize && changed.has('freeEnergy') && typeof engine.resizeParticles === 'function') {
         try { engine.resizeParticles(Math.round(window.S.freeEnergy)); } catch (e) { console.error(e); }
     }
 
@@ -1264,18 +1329,34 @@ function _sanitizeSnapshot(raw, { includeAudio = true, includeVisuals = true } =
         if (COMPAT_FLOW_MODES.includes(raw?.compatFlowMode)) out.compatFlowMode = raw.compatFlowMode;
         if (VISUAL_EFFECT_STYLES.includes(raw?.visualEffectStyle)) out.visualEffectStyle = raw.visualEffectStyle;
         if (VISUAL_2D_BACKDROP_STYLES.includes(raw?.visualEffect2DBackdropStyle)) out.visualEffect2DBackdropStyle = raw.visualEffect2DBackdropStyle;
+        if (ANIMATION_MODES.includes(raw?.backdropAnimationMode)) {
+            out.backdropAnimationMode = raw.backdropAnimationMode === 'held4' ? 'held12' : raw.backdropAnimationMode;
+            _syncAnimationModeMirror(out, 'backdrop');
+        }
+        if (ANIMATION_MODES.includes(raw?.trailAnimationMode)) {
+            out.trailAnimationMode = raw.trailAnimationMode;
+            _syncAnimationModeMirror(out, 'trail');
+        }
         if (SHAPES.includes(raw?.shape)) out.shape = raw.shape;
         const cm = Number(raw?.colorMode);
         if (Number.isInteger(cm) && COLOR_MODES.includes(cm)) out.colorMode = cm;
         for (const key of ['showParticles', 'showRibbons', 'tessRibbons', 'visualEffects', 'visualEffectBackdrop', 'visualEffect2DBackdrop', 'visualEffectPost', 'visualEffectCenterSwim', 'visualEffectNoTrailStyles']) {
             if (typeof raw?.[key] === 'boolean') out[key] = raw[key];
         }
-        // Preserve preset/randomizer trail intent now that Strings/Lattice are
-        // budgeted by the native renderer again. Particles remain the anchor so
-        // a random state cannot become trails-only.
+        if (!out.backdropAnimationMode && typeof raw?.backdropAnimationThrottle === 'boolean') {
+            out.backdropAnimationMode = raw.backdropAnimationThrottle ? 'held12' : 'smooth';
+            _syncAnimationModeMirror(out, 'backdrop');
+        }
+        if (!out.trailAnimationMode && typeof raw?.trailAnimationThrottle === 'boolean') {
+            out.trailAnimationMode = raw.trailAnimationThrottle ? ((Number(raw.trailAnimationFps) || 12) <= 6 ? 'held4' : 'held12') : 'smooth';
+            _syncAnimationModeMirror(out, 'trail');
+        }
+        // Particles remain the anchor so a random state cannot become
+        // trails-only. Do NOT invent trail booleans when they are absent:
+        // continuous RNG may delete showRibbons/tessRibbons intentionally to
+        // preserve the live trail state. Defaulting missing values to false
+        // made sanitized handoff targets silently force trails off.
         out.showParticles = true;
-        if (out.showRibbons === undefined) out.showRibbons = !!raw?.showRibbons;
-        if (out.tessRibbons === undefined) out.tessRibbons = !!raw?.tessRibbons;
     }
 
     if (includeAudio) {
@@ -1287,6 +1368,29 @@ function _sanitizeSnapshot(raw, { includeAudio = true, includeVisuals = true } =
     }
     if (typeof raw?.perfProfile === 'string' && ['balanced', 'quality', 'speed', 'potato'].includes(raw.perfProfile)) out.perfProfile = raw.perfProfile;
     return out;
+}
+
+
+function _preserveRenderStructure(settings, opts = {}) {
+    if (!settings || typeof settings !== 'object') return settings;
+    const keys = opts.preserveRenderStructure === true
+        ? RENDER_STRUCTURE_KEYS
+        : (opts.continuous === true ? CONTINUOUS_STABLE_RENDER_KEYS : null);
+    if (!keys) return settings;
+    let touched = false;
+    for (const key of keys) {
+        if (key in settings) {
+            delete settings[key];
+            touched = true;
+        }
+    }
+    if (touched) {
+        settings._renderStructurePreserved = true;
+        try {
+            window.SS_RANDOMIZER_PRESERVED_RENDER_STRUCTURE_AT = (performance && typeof performance.now === 'function') ? performance.now() : Date.now();
+        } catch (e) {}
+    }
+    return settings;
 }
 
 function _summarize(settings, label = '') {
@@ -1361,8 +1465,10 @@ function _applySnapshotImmediate(settings, opts = {}) {
     _clearDisabledAudioPilotEffective();
     _syncKeys([...changed]);
     _applyEngineSideEffects(changed, {
+        ...opts,
         resize: opts.resize !== false,
         reinitialize: opts.reinitialize === true,
+        applyPerformanceDefaults: opts.applyPerformanceDefaults === true,
     });
     _restartOscIfNeeded(changed);
     _saveState();
@@ -1466,7 +1572,12 @@ function _transitionToSnapshot(settings, opts = {}) {
                 lastUISync = now;
             }
 
-            _applyEngineSideEffects(changed, { resize: false, reinitialize: false });
+            _applyEngineSideEffects(changed, {
+                ...opts,
+                resize: false,
+                reinitialize: false,
+                applyPerfProfile: false,
+            });
             if (window.audio && typeof window.audio.updateVolume === 'function') {
                 try { window.audio.updateVolume(window.S.volume); } catch (e) { console.error(e); }
             }
@@ -1484,7 +1595,12 @@ function _transitionToSnapshot(settings, opts = {}) {
             }
             _clearDisabledAudioPilotEffective();
             _syncKeys([...changed].filter(key => !ownedUserEdited.has(key)));
-            _applyEngineSideEffects(changed, { resize: true, reinitialize: opts.reinitialize === true });
+            _applyEngineSideEffects(changed, {
+                ...opts,
+                resize: true,
+                reinitialize: opts.reinitialize === true,
+                applyPerformanceDefaults: opts.applyPerformanceDefaults === true,
+            });
             _restartOscIfNeeded(changed);
             _transitionRAF = null;
             if (_transitionLiveEditKeys === liveEditKeys) _transitionLiveEditKeys = null;
@@ -1530,7 +1646,7 @@ function _settingsFromWaypoint(wp, { includeAudio = true, includeVisuals = true 
     const clean = _sanitizeSnapshot(raw, { includeAudio, includeVisuals });
     clean._atlasSourceId = wp.id || '';
     clean._atlasSourceName = wp.name || wp.coordId || 'atlas code';
-    return clean;
+    return _stripRandomizerSystemBudget(clean);
 }
 
 function _generateAtlasSettings(opts = {}) {
@@ -1541,9 +1657,10 @@ function _generateAtlasSettings(opts = {}) {
 }
 
 function _finishRandomizerSettings(settings, opts = {}) {
-    const capped = _respectFreeEnergyCap(settings, opts);
-    const leftWeighted = _applyLeftWeightedScene(capped, opts);
-    return _addExpressiveStructure(_defuzzParticleSnapshot(_avoidTinyCenterBall(leftWeighted, opts), opts), opts);
+    const budgetSafe = _stripRandomizerSystemBudget(settings);
+    const leftWeighted = _applyLeftWeightedScene(budgetSafe, opts);
+    const expressive = _addExpressiveStructure(_defuzzParticleSnapshot(_avoidTinyCenterBall(leftWeighted, opts), opts), opts);
+    return _stripRandomizerSystemBudget(_applyRandomizerAnimationModes(expressive, opts));
 }
 
 function _chooseRandomizerSettings(opts = {}) {
@@ -1552,7 +1669,7 @@ function _chooseRandomizerSettings(opts = {}) {
     const useAtlas = allowAtlas && (mode === 'atlas-codes' || _rand() < 0.5);
     if (useAtlas) {
         const atlas = _generateAtlasSettings(opts);
-        if (atlas) return { settings: atlas, source: 'atlas', label: atlas._atlasSourceName || 'atlas code' };
+        if (atlas) return { settings: _applyRandomizerAnimationModes(atlas, opts), source: 'atlas', label: atlas._atlasSourceName || 'atlas code' };
         if (mode === 'atlas-codes') return { settings: null, source: 'atlas-empty', label: 'no atlas codes' };
     }
     return { settings: _finishRandomizerSettings(_generateTrueRandomSettings(opts), opts), source: 'random', label: 'random' };
@@ -1749,17 +1866,54 @@ function _generateTrueRandomSettings({ includeAudio = true, includeVisuals = tru
     return settings;
 }
 
+function _isAtlasTraveling() {
+    const now = performance.now ? performance.now() : Date.now();
+    const settleUntil = Number(window.SS_ATLAS_RANDOMIZER_SETTLE_UNTIL) || 0;
+    if (settleUntil && now < settleUntil) return true;
+    const tr = window.transition;
+    if (!tr) return false;
+    const duration = Math.max(0, Number(tr.duration) || 0);
+    const start = Number(tr.startTime) || 0;
+    return duration <= 0 || (now - start) < duration + 240;
+}
+
+function _scheduleContinuousNext(delayMs = 0) {
+    if (_continuous.timer) {
+        clearTimeout(_continuous.timer);
+        _continuous.timer = null;
+    }
+    if (!_continuous.active) return;
+    const runId = _continuous.runId;
+    const delay = Math.max(0, Number(delayMs) || 0);
+    _continuous.timer = setTimeout(() => {
+        _continuous.timer = null;
+        if (!_continuous.active || runId !== _continuous.runId) return;
+        if (_isAtlasTraveling()) {
+            _scheduleContinuousNext(260);
+            return;
+        }
+        const raf = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : (fn) => setTimeout(() => fn(performance.now ? performance.now() : Date.now()), 16);
+        raf(() => raf(() => {
+            if (_continuous.active && runId === _continuous.runId) _continuousNext();
+        }));
+    }, delay);
+}
+
 function _continuousNext() {
     if (_continuous.timer) {
         clearTimeout(_continuous.timer);
         _continuous.timer = null;
     }
     if (!_continuous.active) return;
+    if (_isAtlasTraveling()) {
+        _scheduleContinuousNext(180);
+        return;
+    }
 
     const now = performance.now ? performance.now() : Date.now();
     const maxPendingMs = Math.max(2500, ((_continuous.transitionSec || 6) * 1000) + 2500);
     if (_continuous.pending && _continuous.pendingStartedAt && (now - _continuous.pendingStartedAt) < maxPendingMs) {
-        _continuous.timer = setTimeout(_continuousNext, Math.max(600, Math.min(2000, _continuous.transitionSec * 220)));
+        _scheduleContinuousNext(Math.max(600, Math.min(2000, _continuous.transitionSec * 220)));
         return;
     }
     if (_continuous.pending) {
@@ -1769,12 +1923,16 @@ function _continuousNext() {
 
     const runId = _continuous.runId;
     _continuous.pendingStartedAt = now;
+    const safeRolls = Math.max(0, Math.floor(Number(window.SS_ATLAS_RANDOMIZER_UNIFORM_ONLY_ROLLS) || 0));
+    const preserveRenderStructure = safeRolls > 0;
+    if (preserveRenderStructure) window.SS_ATLAS_RANDOMIZER_UNIFORM_ONLY_ROLLS = safeRolls - 1;
     const p = randomizeScaleSpaceSettings({
         includeAudio: true,
         includeVisuals: true,
         transitionSec: _continuous.transitionSec,
         continuous: true,
         preserveFreeEnergy: true,
+        preserveRenderStructure,
         randomizeAudioPilotMask: true,
     });
     _continuous.pending = Promise.resolve(p)
@@ -1785,7 +1943,7 @@ function _continuousNext() {
                 _continuous.pendingStartedAt = 0;
             }
             if (!_continuous.active || runId !== _continuous.runId) return;
-            _continuous.timer = setTimeout(_continuousNext, Math.max(900, _continuous.transitionSec * 520));
+            _scheduleContinuousNext(Math.max(900, _continuous.transitionSec * 520));
             _dispatch('scalespace-randomizer-continuous', getContinuousRandomizationState());
         });
 
@@ -1797,7 +1955,7 @@ function _continuousNext() {
             if (!_continuous.pendingStartedAt || (t - _continuous.pendingStartedAt) >= maxPendingMs) {
                 _continuous.pending = null;
                 _continuous.pendingStartedAt = 0;
-                _continuousNext();
+                _scheduleContinuousNext(180);
             }
         }
     }, maxPendingMs + 120);
@@ -1836,7 +1994,11 @@ export function randomizeScaleSpaceSettings(opts = {}) {
     }
 
     const applyOpts = _randomizerApplyOptions(opts, picked);
-    const settings = _respectAudioPilotLocks(picked.settings, applyOpts);
+    const settings = _preserveRenderStructure(_stripRandomizerSystemBudget(_respectAudioPilotLocks(picked.settings, applyOpts)), applyOpts);
+    // freeEnergy is intentionally not part of randomizer targets. If atlas just
+    // landed at a new particle budget, continuous RNG inherits that live budget
+    // instead of transitioning away from it or forcing a resize/rebuild.
+    if (opts.preserveFreeEnergy !== false) delete settings.freeEnergy;
     const source = opts.continuous ? (picked.source === 'atlas' ? 'continuous-atlas' : 'continuous') : picked.source;
     const summary = _summarize(settings, picked.label || source);
     summary.randomizerSource = picked.source;
@@ -1863,7 +2025,7 @@ export async function applyRandomizerPreset(id, opts = {}) {
     const preset = RANDOMIZER_PRESETS.find(p => p.id === id);
     if (!preset) return null;
     _setRandomizerState({ preset: preset.id, transitionSec: opts.transitionSec });
-    const settings = _respectAudioPilotLocks(preset.settings, { ...opts, source: 'preset' });
+    const settings = _stripRandomizerSystemBudget(_respectAudioPilotLocks(preset.settings, { ...opts, source: 'preset' }));
     await _transitionToSnapshot(settings, { ...opts, source: 'preset', reinitialize: opts.reinitialize === true });
     const summary = _summarize(settings, preset.name);
     _dispatch('scalespace-randomized', { ...summary, source: 'preset', presetId: preset.id, presetName: preset.name });
@@ -1873,11 +2035,34 @@ export async function applyRandomizerPreset(id, opts = {}) {
 export async function applyRandomizerHistory(id, opts = {}) {
     const entry = _readHistory().find(h => h.id === id);
     if (!entry || !entry.settings) return null;
-    const settings = _respectAudioPilotLocks(entry.settings, { ...opts, source: 'history' });
+    const settings = _stripRandomizerSystemBudget(_respectAudioPilotLocks(entry.settings, { ...opts, source: 'history' }));
     await _transitionToSnapshot(settings, { ...opts, source: 'history', reinitialize: opts.reinitialize === true });
     const summary = _summarize(settings, entry.label || 'last 10');
     _dispatch('scalespace-randomized', { ...summary, source: 'history', historyId: entry.id });
     return summary;
+}
+
+export function cancelRandomizerTransitions(opts = {}) {
+    _cancelTransition();
+    _continuous.runId++;
+    _continuous.active = false;
+    _continuous.pending = null;
+    _continuous.pendingStartedAt = 0;
+    if (_continuous.timer) {
+        clearTimeout(_continuous.timer);
+        _continuous.timer = null;
+    }
+    if (window.S) {
+        window.S.randomizerContinuous = false;
+        if (opts.keepTransitionSec !== true) {
+            const current = Number(window.S.randomizerTransitionSec ?? _continuous.transitionSec ?? 6.0);
+            window.S.randomizerTransitionSec = Math.max(0.1, Math.min(120, Number.isFinite(current) ? current : 6.0));
+        }
+    }
+    _setRandomizerState({ continuous: false, transitionSec: window.S?.randomizerTransitionSec ?? _continuous.transitionSec ?? 6.0 });
+    _syncKeys(['randomizerContinuous']);
+    _dispatch('scalespace-randomizer-continuous', getContinuousRandomizationState());
+    return getContinuousRandomizationState();
 }
 
 export function setContinuousRandomization(active, opts = {}) {
@@ -1906,14 +2091,15 @@ export function setContinuousRandomization(active, opts = {}) {
     _syncKeys(['randomizerContinuous']);
 
     if (!nextActive) {
-        _cancelTransition();
-        _continuous.pending = null;
-        _dispatch('scalespace-randomizer-continuous', getContinuousRandomizationState());
-        return getContinuousRandomizationState();
+        return cancelRandomizerTransitions({ keepTransitionSec: true });
     }
 
     _dispatch('scalespace-randomizer-continuous', getContinuousRandomizationState());
-    _continuous.timer = setTimeout(_continuousNext, 0);
+    // Starting continuous randomization immediately after atlas travel used to
+    // put atlas cleanup/buildUI and the first RNG target generation on the same
+    // frame. Defer through the atlas settle window + two RAFs so the visual
+    // handoff does not hitch.
+    _scheduleContinuousNext(_isAtlasTraveling() ? 420 : 140);
     return getContinuousRandomizationState();
 }
 
@@ -2000,6 +2186,8 @@ window.applyScaleSpaceSettings = applyScaleSpaceSettings;
 window.applyRandomizerPreset = applyRandomizerPreset;
 window.applyRandomizerHistory = applyRandomizerHistory;
 window.setContinuousRandomization = setContinuousRandomization;
+window.cancelRandomizerTransitions = cancelRandomizerTransitions;
+window.cancelRandomizerTransition = cancelRandomizerTransitions;
 window.updateContinuousRandomizationTransitionSec = updateContinuousRandomizationTransitionSec;
 window.getRandomizerLast10 = getRandomizerLast10;
 window.exportScaleSpaceSettingsFile = exportScaleSpaceSettingsFile;

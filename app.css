@@ -4,6 +4,11 @@
     box-sizing: border-box
 }
 
+html, body {
+    width: 100%;
+    height: 100%;
+}
+
 :root {
     --ui-zoom: 1.0;
 }
@@ -84,9 +89,12 @@ body.ui-ready #hud {
 }
 
 #cv {
-    position: absolute;
+    position: fixed;
     inset: 0;
-    z-index: 1
+    width: 100vw;
+    height: 100vh;
+    display: block;
+    z-index: 1;
 }
 
 #bgGlow {
@@ -1936,6 +1944,34 @@ body[data-theme="synthesist"] .cfg-tab[data-active="true"] {
     color: #ffe0c8;
 }
 
+
+/* Config panel should never spawn a horizontal scrollbar. Some controls/tabs
+ * can briefly measure wider than the body during theme/zoom changes; clip X
+ * and let the existing vertical scroller handle the panel. */
+#configBody,
+#configBody .cfg-pane,
+#configBody .section,
+#configBody .row,
+#configBody .toggles,
+#configBody .cfg-tab-bar {
+    max-width: 100%;
+    min-width: 0;
+    overflow-x: hidden;
+}
+#configBody {
+    overflow-x: hidden !important;
+}
+#configBody .cfg-tab-bar {
+    flex-wrap: wrap;
+}
+#configBody .cfg-tab {
+    flex: 1 1 0;
+    min-width: 0;
+    padding-left: 6px;
+    padding-right: 6px;
+    text-align: center;
+}
+
 /* ──────────────────────────────────────────────────────────────────────────
  * FPS / ENTROPY readout
  * Color shifts based on data-tier set by the fps-monitor loop.
@@ -2696,4 +2732,40 @@ body[data-theme="synthesist"] .wp-cat-count { color: #b08070; }
 .pilot-toggle.randomizer-pilot-toggle {
     width: auto;
     margin-right: 0;
+}
+
+#fps-counter {
+    position: fixed;
+    right: 12px;
+    top: 12px;
+    z-index: 1000000;
+    pointer-events: none;
+    padding: 5px 8px;
+    border: 1px solid rgba(255, 196, 120, 0.38);
+    border-radius: 8px;
+    background: rgba(18, 10, 28, 0.58);
+    color: #ffd890;
+    font-family: var(--ui-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+    font-size: 11px;
+    line-height: 1.1;
+    letter-spacing: 0.04em;
+    text-shadow: 0 0 8px rgba(255, 180, 80, 0.38);
+    box-shadow: 0 0 18px rgba(0, 0, 0, 0.22);
+    backdrop-filter: blur(8px);
+}
+#fps-counter[data-tier="normal"] { color: #6dffb0; }
+#fps-counter[data-tier="warming"] { color: #ffe066; }
+#fps-counter[data-tier="heating"] { color: #ff9a40; }
+#fps-counter[data-tier="hot"] { color: #ff5d5d; }
+#fps-counter[data-tier="overload"] { color: #ff4da6; }
+
+
+
+.row[data-param-key="freeEnergy"][data-perf-scaled="true"] .val {
+    color: #ffd36d;
+    text-shadow: 0 0 8px rgba(255, 211, 109, 0.45);
+}
+body[data-theme="synthesist"] .row[data-param-key="freeEnergy"][data-perf-scaled="true"] .val {
+    color: #ffaa55;
+    text-shadow: 0 0 8px rgba(255, 170, 85, 0.45);
 }

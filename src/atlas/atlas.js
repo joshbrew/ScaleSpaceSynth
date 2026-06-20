@@ -19,8 +19,62 @@ pulseStyle.textContent = `
 }`;
 document.head.appendChild(pulseStyle);
 
+function lerpAngle(a, b, t) {
+    const tau = Math.PI * 2;
+    const d = ((b - a + Math.PI * 3) % tau) - Math.PI;
+    return a + d * t;
+}
+
 function clamp01(v) {
     return Math.max(0, Math.min(1, Number(v) || 0));
+}
+
+// freeEnergy is a particle-count budget. Interpolating it every atlas frame
+// makes active draw counts and trail budgets churn during the camera/parameter
+// morph. Keep it anchored through the flight and commit it at the landing.
+const ATLAS_DEFERRED_PARAM_KEYS = new Set(['freeEnergy']);
+
+const ANIMATION_MODES = new Set(['auto', 'smooth', 'held12', 'held4']);
+function normalizeAnimationMode(mode, legacyThrottle, legacyFps, fallback = 'auto', kind = 'trail') {
+    const isBackdrop = kind === 'backdrop';
+    const raw = String(mode || '').toLowerCase();
+    if (ANIMATION_MODES.has(raw)) return isBackdrop && raw === 'held4' ? 'held12' : raw;
+    if (typeof legacyThrottle === 'boolean') {
+        if (!legacyThrottle) return 'smooth';
+        if (isBackdrop) return 'held12';
+        return (Number(legacyFps) || 12) <= 6 ? 'held4' : 'held12';
+    }
+    return isBackdrop && fallback === 'held4' ? 'held12' : fallback;
+}
+function applyAnimationMode(kind, mode) {
+    const S = window.S || {};
+    const m = normalizeAnimationMode(mode, undefined, undefined, 'auto', kind);
+    const prefix = kind === 'backdrop' ? 'backdrop' : 'trail';
+    S[prefix + 'AnimationMode'] = m;
+    if (m === 'held4' && kind !== 'backdrop') {
+        S[prefix + 'AnimationThrottle'] = true;
+        S[prefix + 'AnimationFps'] = 4;
+    } else if (m === 'held12') {
+        S[prefix + 'AnimationThrottle'] = true;
+        S[prefix + 'AnimationFps'] = 12;
+    } else {
+        S[prefix + 'AnimationThrottle'] = false;
+        S[prefix + 'AnimationFps'] = 12;
+    }
+}
+function applyAnimationModesFromOptics(v = {}) {
+    if (!v || typeof v !== 'object') return;
+    if (v.backdropAnimationMode !== undefined || v.backdropAnimationThrottle !== undefined) {
+        applyAnimationMode('backdrop', normalizeAnimationMode(v.backdropAnimationMode, v.backdropAnimationThrottle, v.backdropAnimationFps, window.S?.backdropAnimationMode || 'auto', 'backdrop'));
+    }
+    if (v.trailAnimationMode !== undefined || v.trailAnimationThrottle !== undefined) {
+        applyAnimationMode('trail', normalizeAnimationMode(v.trailAnimationMode, v.trailAnimationThrottle, v.trailAnimationFps, window.S?.trailAnimationMode || 'auto', 'trail'));
+    }
+}
+function captureAnimationMode(kind) {
+    const S = window.S || {};
+    const prefix = kind === 'backdrop' ? 'backdrop' : 'trail';
+    return normalizeAnimationMode(S[prefix + 'AnimationMode'], S[prefix + 'AnimationThrottle'], S[prefix + 'AnimationFps'], 'auto', kind);
 }
 
 export function visibilityAlphaForKey(key) {
@@ -197,20 +251,76 @@ function applyTransitionSideEffects(keys = []) {
     }
 }
 
+function finiteNumber(v) {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+}
+
+function orbitAnglesFromPositionArray(posArr) {
+    if (!Array.isArray(posArr) || posArr.length < 3) return null;
+    const x = Number(posArr[0]) || 0;
+    const y = Number(posArr[1]) || 0;
+    const z = Number(posArr[2]) || 0;
+    const r = Math.max(1e-6, Math.sqrt(x * x + y * y + z * z));
+    return {
+        yaw: Math.atan2(x, z),
+        pitch: Math.asin(Math.max(-1, Math.min(1, y / r)))
+    };
+}
+
+function cameraStateFromWaypoint(wp, fallbackEngine = window.engine) {
+    if (!wp) return null;
+    const engine = fallbackEngine || window.engine;
+    const cam = engine && engine.cam ? engine.cam : null;
+    const state = {
+        dist: finiteNumber(wp.camDist) ?? finiteNumber(cam && cam.dist) ?? 100,
+        distTarget: finiteNumber(wp.camDist) ?? finiteNumber(cam && cam.distTarget) ?? finiteNumber(cam && cam.dist) ?? 100
+    };
+    if (Array.isArray(wp.camPosArr) && wp.camPosArr.length === 3) state.pos = wp.camPosArr.map(v => Number(v) || 0);
+    if (Array.isArray(wp.camQuatArr) && wp.camQuatArr.length === 4) state.quat = wp.camQuatArr.map((v, i) => Number(v) || (i === 3 ? 1 : 0));
+    if (Number.isFinite(Number(wp.camOrbitYaw))) state.orbitYaw = Number(wp.camOrbitYaw);
+    if (Number.isFinite(Number(wp.camOrbitPitch))) state.orbitPitch = Number(wp.camOrbitPitch);
+    if (!Number.isFinite(state.orbitYaw) || !Number.isFinite(state.orbitPitch)) {
+        const angles = orbitAnglesFromPositionArray(state.pos);
+        if (angles) {
+            if (!Number.isFinite(state.orbitYaw)) state.orbitYaw = angles.yaw;
+            if (!Number.isFinite(state.orbitPitch)) state.orbitPitch = angles.pitch;
+        }
+    }
+    return state;
+}
+
+function cameraStateFromTransitionCamera(cam) {
+    if (!cam) return null;
+    const state = {
+        dist: finiteNumber(cam.dist),
+        distTarget: finiteNumber(cam.distTarget),
+        orbitYaw: finiteNumber(cam.orbitYaw),
+        orbitPitch: finiteNumber(cam.orbitPitch)
+    };
+    if (cam.pos && typeof cam.pos.toArray === 'function') state.pos = cam.pos.toArray();
+    if (cam.quat && typeof cam.quat.toArray === 'function') state.quat = cam.quat.toArray();
+    if (cam.target && typeof cam.target.toArray === 'function') state.target = cam.target.toArray();
+    return state;
+}
+
+function syncRendererCameraState(state) {
+    const engine = window.engine;
+    if (!engine || !state) return;
+    if (typeof engine.applyCameraStateSnapshot === 'function') {
+        try { engine.applyCameraStateSnapshot(state); } catch (e) {}
+    }
+}
+
 function stopContinuousRandomizerForWaypointTravel() {
     const S = window.S || {};
-    let active = S.randomizerContinuous === true;
+    S.randomizerContinuous = false;
     try {
-        if (!active && typeof window.getContinuousRandomizationState === 'function') {
-            active = window.getContinuousRandomizationState().active === true;
-        }
-    } catch (e) {}
-    if (!active) return;
-    try {
-        if (typeof window.setContinuousRandomization === 'function') {
+        if (typeof window.cancelRandomizerTransitions === 'function') {
+            window.cancelRandomizerTransitions({ keepTransitionSec: true });
+        } else if (typeof window.setContinuousRandomization === 'function') {
             window.setContinuousRandomization(false, { transitionSec: S.randomizerTransitionSec || 6.0 });
         } else {
-            S.randomizerContinuous = false;
             if (window.sliderSync && typeof window.sliderSync.randomizerContinuous === 'function') {
                 window.sliderSync.randomizerContinuous(false);
             }
@@ -219,6 +329,10 @@ function stopContinuousRandomizerForWaypointTravel() {
     } catch (e) {
         S.randomizerContinuous = false;
     }
+    if (window.sliderSync && typeof window.sliderSync.randomizerContinuous === 'function') {
+        try { window.sliderSync.randomizerContinuous(false); } catch (e) {}
+    }
+    if (window.syncTogglesFromState) window.syncTogglesFromState();
 }
 
 export function saveWP() {
@@ -306,6 +420,8 @@ export async function captureWaypoint() {
         // ignore this unknown key; new builds read it. Default 1.0 on absence.
         timeScale: (typeof window.S.timeScale === 'number' ? window.S.timeScale : 1.0),
         trailLen: window.S.trailLen,
+        backdropAnimationMode: captureAnimationMode('backdrop'),
+        trailAnimationMode: captureAnimationMode('trail'),
         bgGlow: window.S.bgGlow,
         bgBlur: window.S.bgBlur,
         offsetX: window.S.offsetX,
@@ -335,6 +451,8 @@ export async function captureWaypoint() {
         camDist: engine.cam.dist,
         camQuatArr: engine.cam.quat.toArray(),
         camPosArr: engine.cam.pos.toArray(),
+        camOrbitYaw: engine.cam.orbitYaw,
+        camOrbitPitch: engine.cam.orbitPitch,
         timestamp: Date.now(),
         thumbnail: thumb,
         thumbAspect: aspect,
@@ -479,27 +597,34 @@ export function applyWaypointImmediate(wp, options = {}) {
     if (v.tessRibbons !== undefined) window.S.tessRibbons = !!v.tessRibbons;
     if (v.shape !== undefined) window.S.shape = v.shape;
     if (v.colorMode !== undefined) window.S.colorMode = v.colorMode;
+    applyAnimationModesFromOptics(v);
     if (v.audio) applyAudioWaypointState(v.audio);
 
-    if (wp.camDist !== undefined) {
-        engine.cam.dist = wp.camDist;
-        engine.cam.distTarget = wp.camDist;
-    }
-    if (Array.isArray(wp.camQuatArr) && wp.camQuatArr.length === 4) {
-        engine.cam.quat.fromArray(wp.camQuatArr);
-        const euler = new THREE.Euler().setFromQuaternion(engine.cam.quat, 'YXZ');
-        engine.cam.pitch = euler.x;
-        engine.cam.yaw = euler.y;
-    }
-    if (Array.isArray(wp.camPosArr) && wp.camPosArr.length === 3) {
-        engine.cam.pos.fromArray(wp.camPosArr);
+    const waypointCameraState = cameraStateFromWaypoint(wp, engine);
+    if (waypointCameraState) {
+        if (Number.isFinite(Number(waypointCameraState.dist))) {
+            engine.cam.dist = Number(waypointCameraState.dist);
+            engine.cam.distTarget = Number(waypointCameraState.distTarget ?? waypointCameraState.dist);
+        }
+        if (Array.isArray(waypointCameraState.quat) && waypointCameraState.quat.length === 4 && engine.cam.quat && engine.cam.quat.fromArray) {
+            engine.cam.quat.fromArray(waypointCameraState.quat).normalize();
+            const euler = new THREE.Euler().setFromQuaternion(engine.cam.quat, 'YXZ');
+            engine.cam.pitch = euler.x;
+            engine.cam.yaw = euler.y;
+        }
+        if (Array.isArray(waypointCameraState.pos) && waypointCameraState.pos.length === 3 && engine.cam.pos && engine.cam.pos.fromArray) {
+            engine.cam.pos.fromArray(waypointCameraState.pos);
+        }
+        if (Number.isFinite(Number(waypointCameraState.orbitYaw))) engine.cam.orbitYaw = Number(waypointCameraState.orbitYaw);
+        if (Number.isFinite(Number(waypointCameraState.orbitPitch))) engine.cam.orbitPitch = Number(waypointCameraState.orbitPitch);
+        syncRendererCameraState(waypointCameraState);
     }
 
-    syncTransitionUI([...PARAM_KEYS, ...MOD_KEYS, 'showParticles', 'showRibbons', 'tessRibbons', 'shape', 'colorMode']);
+    syncTransitionUI([...PARAM_KEYS, ...MOD_KEYS, 'showParticles', 'showRibbons', 'tessRibbons', 'shape', 'colorMode', 'backdropAnimationMode', 'trailAnimationMode']);
     applyTransitionSideEffects(PARAM_KEYS);
 
     if (typeof engine.resizeParticles === 'function') {
-        try { engine.resizeParticles(Math.round(window.S.freeEnergy)); } catch (e) { console.error(e); }
+        try { engine.resizeParticles(Math.round(window.S.freeEnergy), { allowStructureGrow: false, reason: 'atlas' }); } catch (e) { console.error(e); }
     }
     if (typeof engine.updateUniforms === 'function') {
         try { engine.updateUniforms(); } catch (e) { console.error(e); }
@@ -547,7 +672,7 @@ export function travelTo(wp) {
     const spd = (window.tour && typeof window.tour.speed === 'number') ? Math.max(0.25, window.tour.speed) : 1;
     const baseDur = window.tour && window.tour.active ? 5000 + Math.random() * 3000 : 5000;
     const dur = baseDur / spd;
-    startTransition(wp.params, wp.camDist, wp.camQuatArr, wp.optics, wp.camPosArr, dur);
+    startTransition(wp.params, wp.camDist, wp.camQuatArr, wp.optics, wp.camPosArr, dur, wp.camOrbitYaw, wp.camOrbitPitch);
     // Layer seam: hand the destination waypoint + transition duration to any
     // registered layers so they can restore/animate their own scene data
     // (e.g. Bioclast cymatics) in step with the param transition.
@@ -573,7 +698,10 @@ export function captureHomepoint() {
             colorMode: window.S.colorMode,
             hue: window.S.hue, sat: window.S.sat, lightness: window.S.lightness,
             opacity: window.S.opacity, tempo: window.S.tempo,
-            trailLen: window.S.trailLen, bgGlow: window.S.bgGlow, bgBlur: window.S.bgBlur,
+            trailLen: window.S.trailLen,
+            backdropAnimationMode: captureAnimationMode('backdrop'),
+            trailAnimationMode: captureAnimationMode('trail'),
+            bgGlow: window.S.bgGlow, bgBlur: window.S.bgBlur,
             offsetX: window.S.offsetX, offsetY: window.S.offsetY, offsetZ: window.S.offsetZ,
             billboardOffset: window.S.billboardOffset,
             showParticles: window.S.showParticles !== false,
@@ -583,10 +711,12 @@ export function captureHomepoint() {
             mods: captureModState(),
             audio: captureAudioWaypointState()
         },
-        camDist:    engine.cam.dist,
-        camQuatArr: engine.cam.quat.toArray(),
-        camPosArr:  engine.cam.pos.toArray(),
-        timestamp:  Date.now()
+        camDist:       engine.cam.dist,
+        camQuatArr:    engine.cam.quat.toArray(),
+        camPosArr:     engine.cam.pos.toArray(),
+        camOrbitYaw:   engine.cam.orbitYaw,
+        camOrbitPitch: engine.cam.orbitPitch,
+        timestamp:     Date.now()
     };
     try { localStorage.setItem('ss_state', JSON.stringify(window.S)); } catch (e) {}
 
@@ -746,7 +876,7 @@ export function showDelModal(id, name) {
     ov.addEventListener('click', e => { if (e.target === ov) ov.remove(); });
 }
 
-function startTransition(toP, toD, toQArr, toV, toPArr, dur = 5000) {
+function startTransition(toP, toD, toQArr, toV, toPArr, dur = 5000, toOrbitYaw = undefined, toOrbitPitch = undefined) {
     const engine = window.engine;
     if (!engine) return;
 
@@ -759,6 +889,8 @@ function startTransition(toP, toD, toQArr, toV, toPArr, dur = 5000) {
         camDist: engine.cam.dist,
         camQuat: engine.cam.quat.clone(),
         camPos: engine.cam.pos.clone(),
+        camOrbitYaw: engine.cam.orbitYaw,
+        camOrbitPitch: engine.cam.orbitPitch,
         optics: {
             opacity: window.S.opacity,
             tempo: window.S.tempo,
@@ -771,6 +903,8 @@ function startTransition(toP, toD, toQArr, toV, toPArr, dur = 5000) {
             sat: window.S.sat ?? 0.8,
             lightness: window.S.lightness ?? 0.9,
             trailLen: window.S.trailLen ?? 10,
+            backdropAnimationMode: captureAnimationMode('backdrop'),
+            trailAnimationMode: captureAnimationMode('trail'),
             bgGlow: window.S.bgGlow ?? 0.3,
             bgBlur: window.S.bgBlur ?? 40,
             showParticles: window.S.showParticles !== false,
@@ -796,16 +930,21 @@ function startTransition(toP, toD, toQArr, toV, toPArr, dur = 5000) {
         showRibbons:   !!window.S.showRibbons,
         tessRibbons:   !!window.S.tessRibbons,
         shape:         window.S.shape || 'circle',
-        colorMode:     window.S.colorMode ?? 0
+        colorMode:     window.S.colorMode ?? 0,
+        backdropAnimationMode: captureAnimationMode('backdrop'),
+        trailAnimationMode:    captureAnimationMode('trail')
     };
     const toFlags = (toV) ? {
         showParticles: toV.showParticles !== undefined ? toV.showParticles : fromFlags.showParticles,
         showRibbons:   toV.showRibbons   !== undefined ? toV.showRibbons   : fromFlags.showRibbons,
         tessRibbons:   toV.tessRibbons   !== undefined ? toV.tessRibbons   : fromFlags.tessRibbons,
         shape:         toV.shape         !== undefined ? toV.shape         : fromFlags.shape,
-        colorMode:     toV.colorMode     !== undefined ? toV.colorMode     : fromFlags.colorMode
+        colorMode:     toV.colorMode     !== undefined ? toV.colorMode     : fromFlags.colorMode,
+        backdropAnimationMode: toV.backdropAnimationMode !== undefined ? normalizeAnimationMode(toV.backdropAnimationMode, toV.backdropAnimationThrottle, toV.backdropAnimationFps, fromFlags.backdropAnimationMode, 'backdrop') : fromFlags.backdropAnimationMode,
+        trailAnimationMode:    toV.trailAnimationMode    !== undefined ? normalizeAnimationMode(toV.trailAnimationMode, toV.trailAnimationThrottle, toV.trailAnimationFps, fromFlags.trailAnimationMode, 'trail') : fromFlags.trailAnimationMode
     } : { ...fromFlags };
 
+    if (toV) applyAnimationModesFromOptics(toV);
     if (toV && toV.audio) applyAudioWaypointState(toV.audio);
 
     const fromVisibility = {
@@ -835,6 +974,8 @@ function startTransition(toP, toD, toQArr, toV, toPArr, dur = 5000) {
 
     syncTransitionUI(['showParticles', 'showRibbons', 'tessRibbons']);
 
+    const targetOrbitAngles = orbitAnglesFromPositionArray(Array.isArray(toPArr) ? toPArr : null);
+
     window.transition = {
         from,
         fromFlags,
@@ -847,6 +988,8 @@ function startTransition(toP, toD, toQArr, toV, toPArr, dur = 5000) {
             camDist: toD !== undefined ? toD : engine.cam.dist,
             camQuat: toQ,
             camPos: toPos,
+            camOrbitYaw: Number.isFinite(Number(toOrbitYaw)) ? Number(toOrbitYaw) : (targetOrbitAngles ? targetOrbitAngles.yaw : engine.cam.orbitYaw),
+            camOrbitPitch: Number.isFinite(Number(toOrbitPitch)) ? Number(toOrbitPitch) : (targetOrbitAngles ? targetOrbitAngles.pitch : engine.cam.orbitPitch),
             optics: toV
         },
         startTime: performance.now(),
@@ -861,6 +1004,7 @@ export function updateTransition() {
     const from = window.transition.from, to = window.transition.to;
 
     PARAM_KEYS.forEach(k => {
+        if (ATLAS_DEFERRED_PARAM_KEYS.has(k)) return;
         if (to.params[k] !== undefined) {
           window.S[k] = from.params[k] + (to.params[k] - from.params[k]) * ease;
           if (window.sliderSync && window.sliderSync[k]) window.sliderSync[k](window.S[k]);
@@ -889,9 +1033,12 @@ export function updateTransition() {
         engine.cam.distTarget = engine.cam.dist;
         engine.cam.quat.copy(from.camQuat).slerp(to.camQuat, ease);
         engine.cam.pos.lerpVectors(from.camPos, to.camPos, ease);
+        engine.cam.orbitYaw = lerpAngle(from.camOrbitYaw ?? engine.cam.orbitYaw ?? 0, to.camOrbitYaw ?? engine.cam.orbitYaw ?? 0, ease);
+        engine.cam.orbitPitch = (from.camOrbitPitch ?? engine.cam.orbitPitch ?? 0) + ((to.camOrbitPitch ?? engine.cam.orbitPitch ?? 0) - (from.camOrbitPitch ?? engine.cam.orbitPitch ?? 0)) * ease;
         const euler = new THREE.Euler().setFromQuaternion(engine.cam.quat, 'YXZ');
         engine.cam.pitch = euler.x;
         engine.cam.yaw = euler.y;
+        syncRendererCameraState(cameraStateFromTransitionCamera(engine.cam));
     }
 
 	// ─── Layer Crossfade ────────────────────────────────────────────────────
@@ -963,23 +1110,46 @@ export function updateTransition() {
             window.S.tessRibbons   = toFlags.tessRibbons;
             if (toFlags.shape !== undefined) window.S.shape = toFlags.shape;
             if (toFlags.colorMode !== undefined) window.S.colorMode = toFlags.colorMode;
-        }
-        if (window.engine && typeof window.engine.resizeParticles === 'function') {
-            try { window.engine.resizeParticles(Math.round(window.S.freeEnergy)); } catch (e) { console.error(e); }
-        }
-        if (window.engine && typeof window.engine.updateUniforms === 'function') {
-            try { window.engine.updateUniforms(); } catch (e) { console.error(e); }
+            if (toFlags.backdropAnimationMode !== undefined) applyAnimationMode('backdrop', toFlags.backdropAnimationMode);
+            if (toFlags.trailAnimationMode !== undefined) applyAnimationMode('trail', toFlags.trailAnimationMode);
         }
         delete window.S._xfade;
         window.transition = null;
-        syncTransitionUI([...PARAM_KEYS, 'showParticles', 'showRibbons', 'tessRibbons', 'shape', 'colorMode']);
+        const settledAt = performance.now ? performance.now() : Date.now();
+        // Continuous RNG should inherit this landed freeEnergy budget, not kick
+        // a random target on the same frame as atlas cleanup. _isAtlasTraveling
+        // watches this settle window before the next continuous roll.
+        window.SS_ATLAS_SETTLED_AT = settledAt;
+        window.SS_ATLAS_RANDOMIZER_SETTLE_UNTIL = settledAt + 900;
+        // First continuous RNG rolls after atlas should be param/uniform-only.
+        // That prevents a waypoint->random handoff from waking a cold trail,
+        // lattice, point-mode, or FX render path and forcing WebGPU/TSL builds
+        // during the visible transition.
+        window.SS_ATLAS_RANDOMIZER_UNIFORM_ONLY_ROLLS = Math.max(2, Math.floor(Number(window.SS_ATLAS_RANDOMIZER_UNIFORM_ONLY_ROLLS) || 0));
+
+        const finalSyncKeys = [...PARAM_KEYS, 'showParticles', 'showRibbons', 'tessRibbons', 'shape', 'colorMode', 'backdropAnimationMode', 'trailAnimationMode'];
         applyTransitionSideEffects(PARAM_KEYS);
-        // Atlas highlight resolution: during the transition the targetWpId
-        // drove the highlight; now that transition is null, the atlas needs
-        // to re-evaluate against isAtWaypointParams. Rebuild so the row
-        // settles on the destination waypoint (which it now matches).
-        if (window.buildAtlasUI && window.engine) window.buildAtlasUI(window.engine);
         try { localStorage.setItem('ss_state', JSON.stringify(window.S)); } catch (e) {}
+
+        const finalizeAtlasLanding = () => {
+            if (window.engine && typeof window.engine.resizeParticles === 'function') {
+                try { window.engine.resizeParticles(Math.round(window.S.freeEnergy), { allowStructureGrow: false, reason: 'atlas' }); } catch (e) { console.error(e); }
+            }
+            if (window.engine && typeof window.engine.updateUniforms === 'function') {
+                try { window.engine.updateUniforms(); } catch (e) { console.error(e); }
+            }
+            syncTransitionUI(finalSyncKeys);
+            // Atlas highlight resolution: during the transition the targetWpId
+            // drove the highlight; now that transition is null, the atlas needs
+            // to re-evaluate against isAtWaypointParams. Rebuild off the landing
+            // frame so it cannot hitch the visual transition/rng handoff.
+            if (window.buildAtlasUI && window.engine) window.buildAtlasUI(window.engine);
+        };
+        try {
+            requestAnimationFrame(() => requestAnimationFrame(finalizeAtlasLanding));
+        } catch (e) {
+            setTimeout(finalizeAtlasLanding, 32);
+        }
         if (tour.active) {
             if (window._nextTourTimeout) clearTimeout(window._nextTourTimeout);
             window._nextTourTimeout = setTimeout(nextTourStop, 500);

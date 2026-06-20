@@ -1,11 +1,11 @@
 import { APP_TEXT } from '../core/text.js';
 import { AudioManager } from '../audio/index.js';
-import { Engine } from '../render/engine.js';
-import { setupUI, buildUI, sliderSync, updatePO, updateUIZoom } from '../ui/index.js';
+import { OffscreenEngineClient, supportsOffscreenEngine } from '../render/offscreen-engine-client.js';
+import { setupUI, buildUI, sliderSync, updateUIZoom } from '../ui/index.js';
 import {
     tour, updateTransition,
-    stopTour, startTour, nextTourStop, captureWaypoint, captureHomepoint,
-    travelToHomepoint, travelTo, buildAtlasUI, saveWP
+    stopTour, startTour, captureWaypoint,
+    travelTo, buildAtlasUI, saveWP
 } from '../atlas/atlas.js';
 import { SS_VERSION } from '../core/state.js';
 import { validateWaypoint, hydrateState } from '../core/validation.js';
@@ -19,7 +19,6 @@ import { seedImportedPlaylist } from '../persistence/playlist.js';
 import { initPerformanceDefaults } from '../render/performance.js';
 import { initAudioReactivity } from '../audio/reactivity.js';
 import { initUiHideButton } from '../ui/ui-hide-button.js';
-import { initVisualEffects } from '../render/visual-effects.js';
 import { installScaleSpaceErrorReporting } from '../core/error-reporting.js';
 
 installScaleSpaceErrorReporting();
@@ -140,6 +139,8 @@ function init() {
   liftFloor('zoomOverdrawPixelRatioScaleMin', 0.72, 0.76);
   liftFloor('zoomOverdrawEffectScaleMin', 0.50, 0.55);
   liftFloor('zoomOverdrawLineScaleMin', 0.10, 0.14);
+  liftFloor('zoomTrailMidBandStrength', 0.68, 0.82);
+  liftFloor('zoomTrailParticleChunk', 512, 2048);
   if (!Number.isFinite(Number(window.S.randomizerFixedFreeEnergy)) || Number(window.S.randomizerFixedFreeEnergy) < 1000) {
     window.S.randomizerFixedFreeEnergy = RANDOMIZER_BENCHMARK_FREE_ENERGY;
   }
@@ -211,11 +212,15 @@ function init() {
   window.S.compatCellularLayer = false;
   window.S.compatAllowManualStructure = false;
 
-  // Baseline renderer: use the original storage-buffer particle material again.
-  // The classic Points fallback remains available via forceParticleVisibility(),
-  // but it no longer replaces the tuned particle style on every boot.
+  // Baseline renderer stays native. Point draw is explicit only; no FPS-triggered
+  // fallback is allowed to swap circle/square/diamond out from under the user.
+  delete window.S.perfAutoPointsFallback;
+  delete window.S.perfPointsFallbackFps;
+  delete window.S.perfPointsFallbackRecoverFps;
+  delete window.S.compatSkipGpuCompute;
   window.S.compatParticleFallback = false;
-  window.S.compatSkipGpuCompute = false;
+  if (window.S.shape === 'point') window.S.perfParticleDrawMode = 'points';
+  else window.S.perfParticleDrawMode = 'native';
   window.S.compatParticleSize = Math.max(0.62, Number(window.S.compatParticleSize) || 0.66);
   window.S.compatParticleOpacity = Math.max(0.22, Number(window.S.compatParticleOpacity) || 0.24);
   window.S.compatParticleCpuMotion = true;
@@ -232,15 +237,13 @@ function init() {
   window.S.nativeTrails = false;
   window.S.showNativeTrails = false;
 
-  // Hard-disable compat sprite maps. Older saved states may still have
-  // compatSpriteMap:true from the quanta texture experiment; WebGPU's
-  // PointsMaterial/map path compiles a uv AttributeNode before render-time
-  // geometry guards can run. Quanta is now represented without texture maps.
-  window.S.compatSpriteMap = false;
   try { localStorage.setItem('ss_state', JSON.stringify(window.S)); } catch (e) {}
 
   // Build assumes self-containment; parameters natively driven by window.S
   initPerformanceDefaults();
+  // Prefer the OffscreenCanvas renderer path when the browser supports it.
+  // Add ?mainRender=1 or ?renderer=main to force the legacy main-thread path.
+  window.S.preferWorkerRenderer = true;
 
   // Initialize AudioManager
   const audio = new AudioManager();
@@ -273,14 +276,36 @@ function init() {
   // Apply initial zoom
   updateUIZoom();
   initUiHideButton();
-  initVisualEffects();
 
   // ─── Initialize WebGPU Engine ────────────────────────────────────────────
   const cv = document.getElementById('cv');
   const bgGlow = document.getElementById('bgGlow');
+  if (cv && cv.style) {
+    cv.style.position = 'fixed';
+    cv.style.inset = '0';
+    cv.style.width = '100vw';
+    cv.style.height = '100vh';
+    cv.style.display = 'block';
+  }
+  function getViewportCanvasSize() {
+    const vw = Math.max(1, Math.floor(window.innerWidth || document.documentElement?.clientWidth || 1));
+    const vh = Math.max(1, Math.floor(window.innerHeight || document.documentElement?.clientHeight || 1));
+    const cw = Math.max(0, Math.floor(cv?.clientWidth || 0));
+    const ch = Math.max(0, Math.floor(cv?.clientHeight || 0));
+    return {
+      width: cw > 0 && cw <= vw * 1.1 ? cw : vw,
+      height: ch > 0 && ch <= vh * 1.1 ? ch : vh,
+    };
+  }
   let engine;
+  if (!supportsOffscreenEngine()) {
+    console.error('FATAL ERROR: OffscreenCanvas renderer is required in this build.');
+    return;
+  }
+  window.SS_OFFSCREEN_RENDERER = true;
+  window.S.preferWorkerRenderer = true;
   try {
-    engine = new Engine(cv, bgGlow);
+    engine = new OffscreenEngineClient(cv, bgGlow);
     window.engine = engine;
     window.debugScaleSpaceVisibility = () => engine.getVisibilityDebug ? engine.getVisibilityDebug() : null;
     window.forceParticleVisibility = () => {
@@ -292,14 +317,18 @@ function init() {
     };
     engine.setupControls(cv);
 
-    engine.resize(window.innerWidth, window.innerHeight);
+    { const { width, height } = getViewportCanvasSize(); engine.resize(width, height); }
     window.addEventListener('resize', () => {
-      engine.resize(window.innerWidth, window.innerHeight);
+      const { width, height } = getViewportCanvasSize();
+      engine.resize(width, height);
     });
   } catch(e) {
     console.error("FATAL ERROR IN ENGINE CONSTRUCTOR:", e);
     return;
   }
+
+
+
 
   // Splash typing now starts on first frame inside startEngine() — see
   // _firstFrameDrawn block below. This guarantees the canvas is showing
@@ -444,81 +473,53 @@ function init() {
       }
   });
 
-  // ─── Animation loop ──────────────────────────────────────────────────────
+  // ─── Offscreen renderer state pump ───────────────────────────────────────
   async function startEngine() {
+    let rendererReady = false;
     try {
       await engine.renderer.init();
       if (engine.reinitializeParticles) {
         await engine.reinitializeParticles({ preferGpu: true });
       }
       if (window.S.compatParticleFallback && engine.ensureParticleVisibilityBootstrap) await engine.ensureParticleVisibilityBootstrap();
+      rendererReady = true;
     } catch(e) {
       console.error("Renderer Init Error:", e);
+      rendererReady = false;
     }
+    if (!rendererReady) return;
 
-    window.forceParticleVisibility = () => {
-      if (window.engine && window.engine.forceParticleVisibility) window.engine.forceParticleVisibility();
-      if (window.engine && window.engine.ensureParticleVisibilityBootstrap) {
-        window.engine.ensureParticleVisibilityBootstrap().catch(err => console.warn('[particles] manual visibility reseed failed:', err));
+    let firstReady = false;
+    let pumpBusy = false;
+    const pumpState = () => {
+      if (pumpBusy) return;
+      pumpBusy = true;
+      try {
+        try { updateTransition(); } catch(e) { console.error("Transition Error:", e); }
+        try { updateModulation(); } catch(e) { console.error("Modulation Error:", e); }
+        if (window._postModulationHooks) {
+          for (const fn of window._postModulationHooks) {
+            try { fn(); } catch(e) { console.error("PostModulation Hook Error:", e); }
+          }
+        }
+        if (window.engine && typeof window.engine.updateUniforms === 'function') window.engine.updateUniforms();
+        try { updateFpsMonitor(); } catch(e) {}
+        if (!firstReady) {
+          firstReady = true;
+          document.body.classList.add('engine-ready');
+          if (startSplashTyping) startSplashTyping();
+          if (window._startWaypoint) {
+            const _sw = window._startWaypoint; window._startWaypoint = null;
+            try { travelTo(_sw); } catch (e) {}
+          }
+        }
+      } finally {
+        pumpBusy = false;
       }
-      return window.debugScaleSpaceVisibility ? window.debugScaleSpaceVisibility() : null;
     };
 
-    let _firstFrameDrawn = false;
-    let _renderErrLogged = false;
-    async function animate() {
-      try {
-          updateTransition();
-      } catch(e) { console.error("Transition Error:", e); }
-      try {
-          updateModulation();
-      } catch(e) { console.error("Modulation Error:", e); }
-      // External-modulation hooks. Optional layers and future modulation
-      // sources (audio reactivity, MIDI, OSC, ...) register functions on
-      // window._postModulationHooks. They run AFTER the built-in oscillation
-      // pipeline — so a hook can compose with or override window.S_effective —
-      // and BEFORE the engine reads it this frame. Core ships only this hook
-      // point; it does nothing unless a layer registers something.
-      if (window._postModulationHooks) {
-          for (const fn of window._postModulationHooks) {
-              try { fn(); } catch(e) { console.error("PostModulation Hook Error:", e); }
-          }
-      }
-      // Await the render so the frame-to-frame interval measured by the FPS
-      // monitor reflects ACTUAL work (the awaited compute/render passes),
-      // not just how often the browser fires rAF. Previously render() was
-      // fire-and-forget, so rAF stayed pinned to the display refresh even
-      // when the GPU was choking — entropy read ~refresh-rate regardless of
-      // load. Awaiting also prevents unbounded frame queueing under load.
-      try {
-          await engine.render();
-      } catch(e) {
-          if (!_renderErrLogged) {
-              _renderErrLogged = true;
-              console.error("Render Loop Error:", e);
-          }
-      }
-      try {
-          updateFpsMonitor();
-      } catch(e) { /* FPS monitor must never break the loop */ }
-      // Mark engine-ready after the first frame is actually drawn.
-      if (!_firstFrameDrawn) {
-          _firstFrameDrawn = true;
-          requestAnimationFrame(() => {
-              document.body.classList.add('engine-ready');
-              if (startSplashTyping) startSplashTyping();
-              // First-run start location: fly to the shipped playlist's first
-              // destination once the engine is actually live.
-              if (window._startWaypoint) {
-                  const _sw = window._startWaypoint; window._startWaypoint = null;
-                  try { travelTo(_sw); } catch (e) {}
-              }
-          });
-      }
-      requestAnimationFrame(animate);
-    }
-
-    animate();
+    pumpState();
+    window._ssStatePump = window.setInterval(pumpState, 33);
   }
 
   startEngine();

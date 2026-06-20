@@ -40,7 +40,7 @@ export const APP_TEXT = {
     "quanta": {
         "label": "Quanta",
         "sub": "particle shape",
-        "items": ["Circle", "Square", "Diamond"]
+        "items": ["Circle", "Square", "Diamond", "Point"]
     },
     "trails": {
         "label": "Trails",

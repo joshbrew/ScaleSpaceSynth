@@ -1,10 +1,20 @@
 import * as THREE from 'three/webgpu';
-import visualEffectsWorkerUrl from './visual-effects.worker.js';
+import { VISUAL_EFFECTS_WORKER_SOURCE } from './visual-effects.worker-source.js';
 import {
     describeVisualEffectStyle as describeVisualEffectStyleFromRegistry,
     FULL_EFFECT_STYLES as REGISTRY_FULL_EFFECT_STYLES,
     visualStylePool as registryVisualStylePool
 } from './visual-style-registry.js';
+
+
+let visualEffectsWorkerUrl = '';
+
+function getVisualEffectsWorkerUrl() {
+    if (!visualEffectsWorkerUrl) {
+        visualEffectsWorkerUrl = URL.createObjectURL(new Blob([VISUAL_EFFECTS_WORKER_SOURCE], { type: 'text/javascript' }));
+    }
+    return visualEffectsWorkerUrl;
+}
 
 const STYLE_LABELS = {
     random: 'Random visualizer',
@@ -130,8 +140,11 @@ function computeDetailScale(S, z) {
     const profileScale = profile === 'potato' ? 0.46 : profile === 'speed' ? 0.62 : profile === 'quality' ? 1.0 : 0.82;
     const adaptiveTrim = 1 - Math.min(0.42, Math.max(0, STATE.adaptiveSkip | 0) * 0.065);
     const pressure = clamp(z?.overdrawPressure || 0, 0, 1);
-    const zoomTrim = (0.74 + Math.max(0.25, Math.min(1, z?.effectScale || 1)) * 0.26) * (1 - pressure * 0.46);
-    return clamp(profileScale * adaptiveTrim * zoomTrim, 0.34, 1.08);
+    const screenPressure = clamp(z?.screenPressure ?? z?.screenOverdraw?.pressure ?? 0, 0, 1);
+    const zoomTrim = (0.74 + Math.max(0.25, Math.min(1, z?.effectScale || 1)) * 0.26)
+        * (1 - pressure * 0.38)
+        * (1 - screenPressure * 0.28);
+    return clamp(profileScale * adaptiveTrim * zoomTrim, 0.26, 1.08);
 }
 
 function detailCount(value, lo, hi) {
@@ -267,23 +280,28 @@ function resolveVisualStyle(S, hue, t) {
 }
 
 function zoomState() {
+    // The 2D backdrop is camera-independent. It can read the last published
+    // render budget for safety pressure, but should not force a fresh
+    // zoom/overdraw recompute just because the camera is close.
+    const cached = window.SS_ZOOM_OPT;
+    if (cached && typeof cached === 'object') return cached;
     try {
         if (window.engine && typeof window.engine.getZoomOptimizationState === 'function') return window.engine.getZoomOptimizationState();
     } catch (e) { console.error(e); }
-    return window.SS_ZOOM_OPT || { close: 0, effectScale: 1 };
+    return { close: 0, closeUnder50: 0, effectScale: 1 };
 }
 
 function perfSkip() {
     const profile = String(window.S?.perfProfile || 'balanced');
     const z = zoomState();
     const pressure = clamp(z.overdrawPressure || 0, 0, 1);
-    const extra = (z.close > 0.88 ? 1 : 0) + Math.round(pressure * 2);
+    const screenPressure = clamp(z.screenPressure ?? z.screenOverdraw?.pressure ?? 0, 0, 1);
+    const screenLevel = Math.max(0, Math.min(5, Number(z.screenOverdraw?.level) || 0));
+    const extra = Math.round(Math.max(pressure, screenPressure) * 2) + (screenLevel >= 4 ? 1 : 0);
     const adaptive = Math.max(0, Math.min(6, STATE.adaptiveSkip | 0));
     if (profile === 'potato') return 3 + extra + Math.min(4, adaptive);
-    if (profile === 'speed') return 2 + Math.min(2, extra) + Math.min(3, adaptive);
-    // The 2D backdrop is very sensitive to whole-frame skipping. Keep balanced
-    // and quality visually continuous; the backdrop detail slider carries the
-    // geometry budget instead.
+    if (profile === 'speed') return 2 + Math.min(3, extra) + Math.min(3, adaptive);
+    if (profile === 'balanced' && (screenLevel >= 4 || pressure > 0.70)) return 2;
     return 1;
 }
 
@@ -294,8 +312,10 @@ function qualityScale() {
     const profileScale = profile === 'potato' ? 0.36 : profile === 'speed' ? 0.50 : profile === 'quality' ? 0.92 : 0.72;
     const z = zoomState();
     const adaptiveTrim = 1 - Math.min(0.18, Math.max(0, STATE.adaptiveSkip | 0) * 0.030);
-    const pressureTrim = 1 - clamp(z.overdrawPressure || 0, 0, 1) * 0.20;
-    return Math.max(0.28, Math.min(1, q * profileScale * (z.effectScale || 1) * adaptiveTrim * pressureTrim));
+    const pressure = clamp(z.overdrawPressure || 0, 0, 1);
+    const screenPressure = clamp(z.screenPressure ?? z.screenOverdraw?.pressure ?? 0, 0, 1);
+    const pressureTrim = (1 - pressure * 0.16) * (1 - screenPressure * 0.12);
+    return Math.max(0.23, Math.min(1, q * profileScale * (z.effectScale || 1) * adaptiveTrim * pressureTrim));
 }
 
 
@@ -303,18 +323,93 @@ function backdropDetailScale(S = window.S || {}) {
     return clamp(Number(S.visualEffect2DResolutionScale ?? 0.66), 0.25, 1);
 }
 
+function getBackdropAnimationThrottleState(S = window.S || {}) {
+    const validModes = new Set(['auto', 'smooth', 'held12']);
+    let mode = String(S.backdropAnimationMode || '').toLowerCase();
+    if (mode === 'held4') mode = 'held12';
+    if (!validModes.has(mode)) {
+        if (S.backdropAnimationThrottle === true) {
+            mode = 'held12';
+        } else {
+            mode = 'smooth';
+        }
+    }
+
+    const now = performance.now ? performance.now() : Date.now();
+    const z = zoomState();
+    const screenPressure = clamp(z.screenPressure ?? z.screenOverdraw?.pressure ?? 0, 0, 1);
+    const fpsInfo = window.SS_FPS || {};
+    const fps = Number(fpsInfo.fps);
+    const entropy = Number.isFinite(Number(fpsInfo.entropy)) ? clamp(Number(fpsInfo.entropy), 0, 100) : 0;
+    let pressure = 0;
+    let targetLevel = 0;
+
+    if (mode === 'auto') {
+        const fpsPressure = Number.isFinite(fps) ? clamp((54 - fps) / 30, 0, 1) : 0;
+        pressure = Math.max(fpsPressure, Math.max(0, (entropy - 18) / 58), screenPressure * 0.42);
+        if ((Number.isFinite(fps) && fps < 24) || entropy > 60) targetLevel = 2;
+        else if ((Number.isFinite(fps) && fps < 44) || entropy > 32) targetLevel = 1;
+    }
+
+    let level = Number.isFinite(STATE.backdropAnimationAutoLevel) ? STATE.backdropAnimationAutoLevel : 0;
+    const nextAt = Number.isFinite(STATE.backdropAnimationAutoNextAt) ? STATE.backdropAnimationAutoNextAt : 0;
+    if (mode !== 'auto') {
+        level = 0;
+        STATE.backdropAnimationAutoNextAt = now + 250;
+    } else if (targetLevel > level && (now >= nextAt || targetLevel - level >= 2)) {
+        level = Math.min(targetLevel, level + (targetLevel - level >= 2 ? 2 : 1));
+        STATE.backdropAnimationAutoNextAt = now + 220;
+    } else if (targetLevel < level && now >= nextAt) {
+        level = Math.max(targetLevel, level - 1);
+        STATE.backdropAnimationAutoNextAt = now + 1800;
+    }
+    STATE.backdropAnimationAutoLevel = level;
+
+    const effectiveMode = mode === 'auto'
+        ? (level >= 1 ? 'held12' : 'smooth')
+        : mode;
+    const effectiveFps = effectiveMode === 'held12' ? 12 : Math.max(1, Math.min(60, Number(S.backdropAnimationFps) || 12));
+    const enabled = effectiveMode === 'held12';
+    const state = {
+        enabled,
+        mode,
+        effectiveMode,
+        auto: mode === 'auto',
+        fps: effectiveFps,
+        intervalMs: enabled ? Math.max(16, 1000 / effectiveFps) : 0,
+        level,
+        targetLevel,
+        pressure,
+        source: fpsInfo.source || 'worker'
+    };
+    window.SS_BACKDROP_ANIMATION_THROTTLE = state;
+    return state;
+}
+
 function backdropWorkerIntervalMs(S = window.S || {}) {
+    const holdState = getBackdropAnimationThrottleState(S);
+    if (holdState.enabled) {
+        return holdState.intervalMs;
+    }
     const detail = backdropDetailScale(S);
     const configured = Number(S.visualEffectBackdropWorkerMs);
     if (Number.isFinite(configured)) return clamp(configured, 8, 140);
-    // Keep animation cadence high even when geometry detail is low. A low-detail
-    // 60-ish FPS backdrop looks better and often costs less than a full-detail
-    // 18 FPS backdrop that judders across the particles.
-    return clamp(12 + (1 - detail) * 22, 10, 42);
+    const z = zoomState();
+    const screenLevel = Math.max(0, Math.min(5, Number(z.screenOverdraw?.level) || 0));
+    const pressure = clamp(Math.max(Number(z.overdrawPressure) || 0, Number(z.screenPressure) || 0), 0, 1);
+    const entropy = Number.isFinite(Number(window.SS_FPS?.entropy)) ? clamp(Number(window.SS_FPS.entropy), 0, 100) : 0;
+    return clamp(12 + (1 - detail) * 22 + screenLevel * 4 + pressure * 12 + Math.max(0, entropy - 42) * 0.22, 10, 72);
 }
 
 function backdropRequestStyleKey(snapshot = {}) {
     return [snapshot.style || '', snapshot.backdropStyle || 'classic'].join('|');
+}
+
+function isLineOnly2DBackdropStyle(S = window.S || {}) {
+    const raw = String(S.visualEffect2DBackdropStyle || S.visualEffectStyle || 'classic').toLowerCase();
+    const fallback = String(S.visualEffectStyle || 'classic').toLowerCase();
+    const style = (raw === 'auto' || raw === 'match') ? fallback : raw;
+    return style === 'vectorscope' || style === 'oscilloscope';
 }
 
 function updateBackdropTransitionState(styleKey, now = performance.now()) {
@@ -389,7 +484,7 @@ function makeVisualEffectWorkerSlot(index) {
 function spawnVisualEffectWorkerSlot(slot) {
     if (!slot || typeof Worker === 'undefined') return false;
     try {
-        const w = new Worker(visualEffectsWorkerUrl);
+        const w = new Worker(getVisualEffectsWorkerUrl(), { name: `scale-space-backdrop-${slot.index || 0}` });
         slot.worker = w;
         slot.busy = false;
         slot.failed = false;
@@ -511,20 +606,49 @@ function recycleVisualEffectWorker(reason = 'stale') {
     return recycleVisualEffectWorkerSlot(primary, reason);
 }
 
+
+function desired2DBlurPasses(S, amount = 1, fill = false) {
+    const profile = String(S?.perfProfile || 'balanced');
+    const entropy = Number.isFinite(Number(window.SS_FPS?.entropy)) ? clamp(Number(window.SS_FPS.entropy), 0, 100) : 0;
+    let pressure = 0;
+    let screenPressure = 0;
+    let screenLevel = 0;
+    try {
+        const z = window.engine?.getZoomOptimizationState?.() || window.SS_ZOOM_OPT || {};
+        pressure = clamp(Number(z.overdrawPressure) || 0, 0, 1);
+        screenPressure = clamp(Number(z.screenPressure ?? z.screenOverdraw?.pressure) || 0, 0, 1);
+        screenLevel = Math.max(0, Math.min(5, Number(z.screenOverdraw?.level) || 0));
+    } catch (e) {
+        pressure = 0;
+        screenPressure = 0;
+        screenLevel = 0;
+    }
+    let passes = profile === 'potato' ? 3 : profile === 'speed' ? 5 : profile === 'quality' ? 10 : 8;
+    const hot = Math.max(pressure, screenPressure);
+    passes -= Math.round(hot * 2.1 + screenPressure * 0.9 + Math.max(0, entropy - 42) / 28);
+    if (screenLevel >= 5) passes -= 1;
+    if (fill) passes -= profile === 'quality' ? 1 : 1;
+    if (amount < 0.28) passes = Math.min(passes, 4);
+    const minimum = profile === 'potato' ? 1 : profile === 'speed' ? 2 : 3;
+    return Math.max(minimum, Math.min(10, passes | 0));
+}
+
 function update2DBackdropOpacity(gpu, amount, S, fade2D) {
     const mix = clamp(Number(S.visualEffect2DBackdropMix ?? 1.0) || 1.0, 0.05, 2.5);
     const sliderLift = Math.pow(mix, 0.78);
     const lineBase = clamp((0.044 + amount * 0.050 + STATE.beat * 0.018) * sliderLift * fade2D, 0.0, 0.25);
     const fillBase = clamp((0.038 + amount * 0.048 + STATE.beat * 0.020) * sliderLift * fade2D, 0.0, 0.21);
-    const blurLine = clamp(lineBase * 0.78, 0.0, 0.20);
-    const blurFill = clamp(fillBase * 1.02, 0.0, 0.22);
+    const blurLine = clamp(lineBase * 0.94, 0.0, 0.22);
+    const blurFill = clamp(fillBase * 1.16, 0.0, 0.24);
+    const lineBlurPasses = desired2DBlurPasses(S, amount, false);
+    const fillBlurPasses = desired2DBlurPasses(S, amount, true);
     if (gpu.mesh && gpu.mesh.material) gpu.mesh.material.opacity = lineBase;
     if (gpu.fillMesh && gpu.fillMesh.material) gpu.fillMesh.material.opacity = fillBase;
     if (Array.isArray(gpu.blurMeshes)) {
-        for (const m of gpu.blurMeshes) if (m && m.material) m.material.opacity = blurLine;
+        gpu.blurMeshes.forEach((m, i) => { if (m && m.material) m.material.opacity = i < lineBlurPasses ? blurLine : 0.0; });
     }
     if (Array.isArray(gpu.blurFillMeshes)) {
-        for (const m of gpu.blurFillMeshes) if (m && m.material) m.material.opacity = blurFill;
+        gpu.blurFillMeshes.forEach((m, i) => { if (m && m.material) m.material.opacity = i < fillBlurPasses ? blurFill : 0.0; });
     }
 }
 
@@ -551,31 +675,55 @@ function apply2DBackdropObjectMotion(gpu, amount, S, frameAgeMs = 0) {
     const period = matrix ? 28 + seed * 20 : grid ? 24 + seed * 18 : radial ? 16 + seed * 13 : 18 + seed * 15;
     const duty = matrix ? 0.10 : grid ? 0.14 : radial ? 0.30 : ribbon ? 0.26 : 0.22;
     const gate = dutyPulse(t + seed * period, seed, duty, period);
-    const staleGate = clamp((Number(frameAgeMs) - 320) / 1500, 0, 1) * (matrix || grid ? 0.48 : 0.70);
+    const staleGate = clamp((Number(frameAgeMs) - 320) / 1500, 0, 1) * (matrix || grid ? 0.36 : 0.52);
     const active = Math.max(gate, staleGate);
-    const limit = (matrix ? 0.006 : grid ? 0.010 : radial ? 0.060 : ribbon ? 0.042 : 0.036) * clamp(0.70 + amount * 0.18, 0.65, 1.12);
-    const slowA = Math.sin(t * (0.060 + seed * 0.028) + seed * 19.0);
-    const slowB = Math.sin(t * (0.031 + seed * 0.019) + seed * 41.0) * 0.42;
-    const targetAngle = active * limit * (slowA + slowB);
-    const driftGate = Math.max(active * 0.72, staleGate);
-    const halfW = Number(gpu.backdropHalfW) || 1;
-    const halfH = Number(gpu.backdropHalfH) || 1;
-    const targetX = driftGate * halfW * (matrix ? 0.0014 : grid ? 0.0020 : 0.0040) * Math.sin(t * (0.050 + seed * 0.024) + seed * 9.0);
-    const targetY = driftGate * halfH * (matrix ? 0.0018 : grid ? 0.0022 : 0.0045) * Math.cos(t * (0.044 + seed * 0.019) + seed * 13.0);
-    const audioPulse = clamp((STATE.beat || 0) * (matrix || grid ? 0.0035 : 0.006) + (STATE.bass || 0) * (matrix || grid ? 0.0018 : 0.0035) + (STATE.treble || 0) * (matrix || grid ? 0.0016 : 0.0025), 0, matrix || grid ? 0.006 : 0.012);
-    const targetScale = 1 + audioPulse - Math.abs(targetAngle) * 0.030 - driftGate * (matrix || grid ? 0.0010 : 0.0020);
+    const userMotion = clamp(Number(S.visualEffect2DBackdropMotion ?? 0), 0, 1);
+    if (userMotion <= 0.001) {
+        STATE.backdropObjectMotion = { style, angle: 0, x: 0, y: 0, scale: 1, active: 0, frameAge: 0 };
+        group.rotation.z = 0;
+        group.position.set(0, 0, 0);
+        group.scale.setScalar(1);
+        group.visible = true;
+        return;
+    }
+    const motion = userMotion * 0.5;
+    const motionCurve = motion * motion;
     let m = STATE.backdropObjectMotion;
     if (!m || m.style !== style) {
-        m = STATE.backdropObjectMotion = { style, angle: targetAngle, x: targetX, y: targetY, scale: targetScale };
+        m = STATE.backdropObjectMotion = {
+            style,
+            angle: 0,
+            x: 0,
+            y: 0,
+            scale: 1,
+            active: active,
+            frameAge: Number(frameAgeMs) || 0
+        };
     }
-    const k = 0.030 + staleGate * 0.040;
+    m.active += (active - (Number(m.active) || 0)) * 0.045;
+    m.frameAge += ((Number(frameAgeMs) || 0) - (Number(m.frameAge) || 0)) * 0.10;
+    const smoothActive = clamp(Number(m.active) || 0, 0, 1);
+    const agePenalty = clamp((m.frameAge - 420) / 1400, 0, 1);
+    const limit = (matrix ? 0.0030 : grid ? 0.0046 : radial ? 0.022 : ribbon ? 0.016 : 0.013)
+        * clamp(0.70 + amount * 0.15, 0.62, 1.02) * motionCurve;
+    const slowA = Math.sin(t * (0.052 + seed * 0.023) + seed * 19.0);
+    const slowB = Math.sin(t * (0.027 + seed * 0.015) + seed * 41.0) * 0.34;
+    const targetAngle = smoothActive * limit * (slowA + slowB) * (1 - agePenalty * 0.30);
+    const driftGate = Math.max(smoothActive * 0.42, staleGate * 0.48) * motionCurve * (1 - agePenalty * 0.22);
+    const halfW = Number(gpu.backdropHalfW) || 1;
+    const halfH = Number(gpu.backdropHalfH) || 1;
+    const targetX = driftGate * halfW * (matrix ? 0.00055 : grid ? 0.00075 : 0.00125) * Math.sin(t * (0.043 + seed * 0.020) + seed * 9.0);
+    const targetY = driftGate * halfH * (matrix ? 0.00065 : grid ? 0.00085 : 0.00140) * Math.cos(t * (0.038 + seed * 0.016) + seed * 13.0);
+    const audioPulse = clamp(((STATE.beat || 0) * (matrix || grid ? 0.0013 : 0.0021) + (STATE.bass || 0) * (matrix || grid ? 0.0007 : 0.0012) + (STATE.treble || 0) * (matrix || grid ? 0.0005 : 0.0009)) * (0.28 + motion * 0.52), 0, matrix || grid ? 0.0022 : 0.0039);
+    const targetScale = 1 + audioPulse - Math.abs(targetAngle) * 0.022 - driftGate * (matrix || grid ? 0.00055 : 0.0011);
+    const k = 0.014 + smoothActive * 0.012 + motion * 0.008;
     m.angle += (targetAngle - m.angle) * k;
     m.x += (targetX - m.x) * k;
     m.y += (targetY - m.y) * k;
-    m.scale += (targetScale - m.scale) * k;
+    m.scale += (targetScale - m.scale) * (k * 0.85);
     group.rotation.z = m.angle;
     group.position.set(m.x, m.y, 0);
-    group.scale.setScalar(clamp(m.scale, 0.985, 1.004));
+    group.scale.setScalar(clamp(m.scale, 0.995, 1.0015));
     group.visible = true;
 }
 
@@ -1319,6 +1467,8 @@ function drawFrame() {
         + STATE.bass * (0.05 + dynamics * 0.07) + STATE.treble * (0.03 + dynamics * 0.05)
         + drive.temperature * 0.055 * dynamics + drive.scaleDepth * 0.035 * expressivity + drive.particleLoad * 0.010;
     const pressure = clamp(z.overdrawPressure || 0, 0, 1);
+    const screenPressure = clamp(z.screenPressure ?? z.screenOverdraw?.pressure ?? 0, 0, 1);
+    const screenLevel = Math.max(0, Math.min(5, Number(z.screenOverdraw?.level) || 0));
     const active2D = S.visualEffectBackdrop !== false && S.visualEffect2DBackdrop !== false;
     const active3D = S.visualEffectPost !== false;
     const layerBudget = active2D && active3D ? 0.86 : 1.0;
@@ -1796,11 +1946,14 @@ function request2DBackdropFrame(snapshot) {
     const workerTarget = desiredBackdropWorkerCount(window.S || {}, styleAgeMs);
     if (!ensureVisualEffectWorkerPool(workerTarget)) return;
 
+    const holdState = getBackdropAnimationThrottleState(window.S || {});
     const minInterval = backdropWorkerIntervalMs(window.S || {});
     const currentFrameAge = STATE.workerFrame ? Math.max(0, now - (Number(STATE.workerFrame.arrivedAt) || now)) : 9999;
-    const transitionInterval = Math.max(18, Math.min(36, minInterval * 0.72));
+    const heldBackdrop = holdState.enabled === true;
+    const transitionInterval = heldBackdrop ? minInterval : Math.max(18, Math.min(36, minInterval * 0.72));
     const interval = transitionUrgent ? transitionInterval : minInterval;
-    if (now - (STATE.workerLastRequestAt || 0) < interval && currentFrameAge < 160) return;
+    const maxHoldAge = heldBackdrop ? Math.max(140, interval * 1.25) : 160;
+    if (now - (STATE.workerLastRequestAt || 0) < interval && currentFrameAge < maxHoldAge) return;
 
     const slot = selectVisualEffectWorkerSlot(transitionUrgent, styleChanged, now);
     if (!slot || !slot.worker) return;
@@ -1832,6 +1985,54 @@ function request2DBackdropFrame(snapshot) {
     }
 }
 
+
+
+function medianOfSorted(values) {
+    const n = values.length;
+    if (!n) return 0;
+    values.sort((a, b) => a - b);
+    const mid = n >> 1;
+    return (n & 1) ? values[mid] : (values[mid - 1] + values[mid]) * 0.5;
+}
+
+function computeBackdropFrameCenter(frame, segs, tris) {
+    const xs = [];
+    const ys = [];
+    const srcP = frame && frame.positions;
+    const srcFP = frame && frame.fillPositions;
+    const maxLinePts = Math.min(Math.max(0, segs | 0), srcP && srcP.length ? (srcP.length / 4) | 0 : 0);
+    const stepLine = Math.max(1, Math.floor(maxLinePts / 6000));
+    for (let i = 0; i < maxLinePts; i += stepLine) {
+        const j = i * 4;
+        const ax = Number(srcP[j + 0]);
+        const ay = Number(srcP[j + 1]);
+        const bx = Number(srcP[j + 2]);
+        const by = Number(srcP[j + 3]);
+        if (Number.isFinite(ax) && Number.isFinite(ay)) { xs.push(ax); ys.push(ay); }
+        if (Number.isFinite(bx) && Number.isFinite(by)) { xs.push(bx); ys.push(by); }
+    }
+    const maxFillPts = Math.min(Math.max(0, tris | 0), srcFP && srcFP.length ? (srcFP.length / 6) | 0 : 0);
+    const stepFill = Math.max(1, Math.floor(maxFillPts / 3000));
+    for (let i = 0; i < maxFillPts; i += stepFill) {
+        const j = i * 6;
+        const ax = Number(srcFP[j + 0]);
+        const ay = Number(srcFP[j + 1]);
+        const bx = Number(srcFP[j + 2]);
+        const by = Number(srcFP[j + 3]);
+        const cx = Number(srcFP[j + 4]);
+        const cy = Number(srcFP[j + 5]);
+        if (Number.isFinite(ax) && Number.isFinite(ay)) { xs.push(ax); ys.push(ay); }
+        if (Number.isFinite(bx) && Number.isFinite(by)) { xs.push(bx); ys.push(by); }
+        if (Number.isFinite(cx) && Number.isFinite(cy)) { xs.push(cx); ys.push(cy); }
+    }
+    if (!xs.length || !ys.length) return { x: 0, y: 0 };
+    const mx = medianOfSorted(xs);
+    const my = medianOfSorted(ys);
+    return {
+        x: clamp(mx, -3.0, 3.0),
+        y: clamp(my, -3.0, 3.0),
+    };
+}
 
 function hide2DBackdropGeometry() {
     const gpu = STATE.gpu2d;
@@ -1877,30 +2078,59 @@ function apply2DBackdropFrame(amount = 1) {
     const segs = Math.max(0, Math.min(gpu.maxSegments, frame.segments | 0));
     const srcP = frame.positions;
     const srcC = frame.colors;
-    const tris = Math.max(0, Math.min(gpu.maxFillTriangles || 0, frame.triangles | 0));
+    let tris = Math.max(0, Math.min(gpu.maxFillTriangles || 0, frame.triangles | 0));
+    const suppressFill = isLineOnly2DBackdropStyle(S);
+    if (suppressFill) tris = 0;
     gpu.backdropHalfW = halfW;
     gpu.backdropHalfH = halfH;
-    const projectionKey = [frame.id, segs, tris, Math.round(halfW * 100), Math.round(halfH * 100), Math.round(z * 100)].join(':');
+    const lineBlurPasses = desired2DBlurPasses(S, amount, false);
+    const fillBlurPasses = desired2DBlurPasses(S, amount, true);
+    const backdropMotion = clamp(Number(S.visualEffect2DBackdropMotion ?? 0), 0, 1);
+    let centerX = 0;
+    let centerY = 0;
+    if (backdropMotion > 0.001) {
+        const frameCenter = computeBackdropFrameCenter(frame, segs, tris);
+        const rawCenterX = Number(frameCenter.x) || 0;
+        const rawCenterY = Number(frameCenter.y) || 0;
+        if (!Number.isFinite(gpu.backdropCenterX) || !Number.isFinite(gpu.backdropCenterY) || gpu.backdropCenterStyle !== frame.styleKey) {
+            gpu.backdropCenterX = rawCenterX;
+            gpu.backdropCenterY = rawCenterY;
+            gpu.backdropCenterStyle = frame.styleKey;
+        } else {
+            const kCenter = 0.012 + backdropMotion * 0.018;
+            gpu.backdropCenterX += (rawCenterX - gpu.backdropCenterX) * kCenter;
+            gpu.backdropCenterY += (rawCenterY - gpu.backdropCenterY) * kCenter;
+        }
+        centerX = Number(gpu.backdropCenterX) || 0;
+        centerY = Number(gpu.backdropCenterY) || 0;
+    } else {
+        gpu.backdropCenterX = 0;
+        gpu.backdropCenterY = 0;
+        gpu.backdropCenterStyle = frame.styleKey;
+    }
+    const projectionKey = [frame.id, segs, tris, Math.round(halfW * 100), Math.round(halfH * 100), Math.round(z * 100), Math.round(centerX * 1000), Math.round(centerY * 1000)].join(':');
     if (gpu.last2DProjectionKey === projectionKey) {
-        const blurScale = 1 + clamp(amount, 0, 2) * 0.0025;
-        const blurX = halfW * 0.0088;
-        const blurY = halfH * 0.0088;
+        const blurScale = 1.002 + clamp(amount, 0, 2) * 0.0038;
+        const blurX = halfW * 0.0125;
+        const blurY = halfH * 0.0125;
         if (Array.isArray(gpu.blurMeshes) && Array.isArray(gpu.blurOffsets)) {
             gpu.blurMeshes.forEach((m, i) => {
                 if (!m) return;
                 const off = gpu.blurOffsets[i] || [0, 0];
                 m.position.set(off[0] * blurX, off[1] * blurY, 0);
-                m.scale.setScalar(blurScale + i * 0.0010);
-                m.visible = segs > 0;
+                m.scale.setScalar(blurScale + i * 0.0016);
+                m.visible = segs > 0 && i < lineBlurPasses;
             });
         }
+        if (gpu.fillMesh) gpu.fillMesh.visible = tris > 0;
+        if (tris <= 0 && gpu.fillGeometry) gpu.fillGeometry.setDrawRange(0, 0);
         if (Array.isArray(gpu.blurFillMeshes) && Array.isArray(gpu.blurOffsets)) {
             gpu.blurFillMeshes.forEach((m, i) => {
                 if (!m) return;
                 const off = gpu.blurOffsets[i] || [0, 0];
                 m.position.set(off[0] * blurX * 1.08, off[1] * blurY * 1.08, 0);
-                m.scale.setScalar(blurScale + 0.0022 + i * 0.0011);
-                m.visible = tris > 0;
+                m.scale.setScalar(blurScale + 0.0032 + i * 0.0017);
+                m.visible = tris > 0 && i < fillBlurPasses;
             });
         }
         update2DBackdropOpacity(gpu, amount, S, fade2D);
@@ -1911,11 +2141,11 @@ function apply2DBackdropFrame(amount = 1) {
     for (let i = 0; i < segs; i++) {
         const si = i * 4;
         const vi = i * 6;
-        gpu.positions[vi + 0] = srcP[si + 0] * halfW;
-        gpu.positions[vi + 1] = srcP[si + 1] * halfH;
+        gpu.positions[vi + 0] = (srcP[si + 0] - centerX) * halfW;
+        gpu.positions[vi + 1] = (srcP[si + 1] - centerY) * halfH;
         gpu.positions[vi + 2] = z;
-        gpu.positions[vi + 3] = srcP[si + 2] * halfW;
-        gpu.positions[vi + 4] = srcP[si + 3] * halfH;
+        gpu.positions[vi + 3] = (srcP[si + 2] - centerX) * halfW;
+        gpu.positions[vi + 4] = (srcP[si + 3] - centerY) * halfH;
         gpu.positions[vi + 5] = z;
         gpu.colors[vi + 0] = srcC[vi + 0] || 0;
         gpu.colors[vi + 1] = srcC[vi + 1] || 0;
@@ -1930,7 +2160,7 @@ function apply2DBackdropFrame(amount = 1) {
     if (cAttr) cAttr.needsUpdate = true;
     gpu.geometry.setDrawRange(0, segs * 2);
     gpu.mesh.visible = segs > 0;
-    if (Array.isArray(gpu.blurMeshes)) gpu.blurMeshes.forEach((m) => { if (m) m.visible = segs > 0; });
+    if (Array.isArray(gpu.blurMeshes)) gpu.blurMeshes.forEach((m, i) => { if (m) m.visible = segs > 0 && i < lineBlurPasses; });
     gpu.segments = segs;
 
     const srcFP = frame.fillPositions;
@@ -1939,14 +2169,14 @@ function apply2DBackdropFrame(amount = 1) {
         for (let i = 0; i < tris; i++) {
             const si = i * 6;
             const vi = i * 9;
-            gpu.fillPositions[vi + 0] = srcFP[si + 0] * halfW;
-            gpu.fillPositions[vi + 1] = srcFP[si + 1] * halfH;
+            gpu.fillPositions[vi + 0] = (srcFP[si + 0] - centerX) * halfW;
+            gpu.fillPositions[vi + 1] = (srcFP[si + 1] - centerY) * halfH;
             gpu.fillPositions[vi + 2] = z - 0.06;
-            gpu.fillPositions[vi + 3] = srcFP[si + 2] * halfW;
-            gpu.fillPositions[vi + 4] = srcFP[si + 3] * halfH;
+            gpu.fillPositions[vi + 3] = (srcFP[si + 2] - centerX) * halfW;
+            gpu.fillPositions[vi + 4] = (srcFP[si + 3] - centerY) * halfH;
             gpu.fillPositions[vi + 5] = z - 0.06;
-            gpu.fillPositions[vi + 6] = srcFP[si + 4] * halfW;
-            gpu.fillPositions[vi + 7] = srcFP[si + 5] * halfH;
+            gpu.fillPositions[vi + 6] = (srcFP[si + 4] - centerX) * halfW;
+            gpu.fillPositions[vi + 7] = (srcFP[si + 5] - centerY) * halfH;
             gpu.fillPositions[vi + 8] = z - 0.06;
             gpu.fillColors[vi + 0] = srcFC[vi + 0] || 0;
             gpu.fillColors[vi + 1] = srcFC[vi + 1] || 0;
@@ -1964,7 +2194,7 @@ function apply2DBackdropFrame(amount = 1) {
         if (fcAttr) fcAttr.needsUpdate = true;
         gpu.fillGeometry.setDrawRange(0, tris * 3);
         gpu.fillMesh.visible = true;
-        if (Array.isArray(gpu.blurFillMeshes)) gpu.blurFillMeshes.forEach((m) => { if (m) m.visible = true; });
+        if (Array.isArray(gpu.blurFillMeshes)) gpu.blurFillMeshes.forEach((m, i) => { if (m) m.visible = i < fillBlurPasses; });
         gpu.fillTriangles = tris;
     } else if (gpu.fillMesh && gpu.fillGeometry) {
         gpu.fillMesh.visible = false;
@@ -1973,15 +2203,15 @@ function apply2DBackdropFrame(amount = 1) {
         gpu.fillTriangles = 0;
     }
 
-    const blurScale = 1 + clamp(amount, 0, 2) * 0.0025;
-    const blurX = halfW * 0.0088;
-    const blurY = halfH * 0.0088;
+    const blurScale = 1.002 + clamp(amount, 0, 2) * 0.0038;
+    const blurX = halfW * 0.0125;
+    const blurY = halfH * 0.0125;
     if (Array.isArray(gpu.blurMeshes) && Array.isArray(gpu.blurOffsets)) {
         gpu.blurMeshes.forEach((m, i) => {
             if (!m) return;
             const off = gpu.blurOffsets[i] || [0, 0];
             m.position.set(off[0] * blurX, off[1] * blurY, 0);
-            m.scale.setScalar(blurScale + i * 0.0010);
+            m.scale.setScalar(blurScale + i * 0.0016);
         });
     }
     if (Array.isArray(gpu.blurFillMeshes) && Array.isArray(gpu.blurOffsets)) {
@@ -1989,7 +2219,7 @@ function apply2DBackdropFrame(amount = 1) {
             if (!m) return;
             const off = gpu.blurOffsets[i] || [0, 0];
             m.position.set(off[0] * blurX * 1.08, off[1] * blurY * 1.08, 0);
-            m.scale.setScalar(blurScale + 0.0022 + i * 0.0011);
+            m.scale.setScalar(blurScale + 0.0032 + i * 0.0017);
         });
     }
 
@@ -2063,6 +2293,8 @@ function drawGpuFrame() {
         + STATE.bass * (0.05 + dynamics * 0.07) + STATE.treble * (0.03 + dynamics * 0.05)
         + drive.temperature * 0.055 * dynamics + drive.scaleDepth * 0.035 * expressivity + drive.particleLoad * 0.010;
     const pressure = clamp(z.overdrawPressure || 0, 0, 1);
+    const screenPressure = clamp(z.screenPressure ?? z.screenOverdraw?.pressure ?? 0, 0, 1);
+    const screenLevel = Math.max(0, Math.min(5, Number(z.screenOverdraw?.level) || 0));
     const active2D = S.visualEffectBackdrop !== false && S.visualEffect2DBackdrop !== false;
     const active3D = S.visualEffectPost !== false;
     const layerBudget = active2D && active3D ? 0.86 : 1.0;
@@ -2087,10 +2319,12 @@ function drawGpuFrame() {
         const backdropStyleAgeMs = previewBackdropTransitionAge(backdropStyleKey, performance.now());
         const currentFrameAgeMs = STATE.workerFrame ? Math.max(0, performance.now() - (Number(STATE.workerFrame.arrivedAt) || performance.now())) : 9999;
         const transitionDetail = backdropTransitionDetailScale(backdropStyleAgeMs, styleBlend, currentFrameAgeMs);
-        const max2d = Math.max(420, Math.min(8400, Math.floor(8400 * STATE.detail * backdropDetail * backdropDetail * transitionDetail * (1 - pressure * 0.30) * (active3D ? 0.88 : 1))));
+        const screenBudget = (1 - pressure * 0.24) * (1 - screenPressure * 0.32) * (1 - screenLevel * 0.035);
+        const max2d = Math.max(300, Math.min(8400, Math.floor(8400 * STATE.detail * backdropDetail * backdropDetail * transitionDetail * screenBudget * (active3D ? 0.88 : 1))));
         request2DBackdropFrame({
             style: chosen,
             backdropStyle,
+            backdropMotion: clamp(Number(S.visualEffect2DBackdropMotion ?? 0), 0, 1),
             maxSegments: max2d,
             amount,
             mix: Number(S.visualEffect2DBackdropMix ?? 1.0) || 1.0,
@@ -2113,7 +2347,8 @@ function drawGpuFrame() {
 
     const fade3D = clamp(Number(S.visualEffect3DFade ?? 0.5), 0, 1);
     const radius3D = radius * 2.0;
-    const maxSeg = Math.max(128, Math.min(gpu.maxSegments, Math.floor(gpu.maxSegments * STATE.detail * (1 - pressure * 0.40) * (0.28 + fade3D * 0.82) * (active2D ? 0.84 : 1))));
+    const lineBudget = (1 - pressure * 0.32) * (1 - screenPressure * 0.28) * (1 - screenLevel * 0.025);
+    const maxSeg = Math.max(128, Math.min(gpu.maxSegments, Math.floor(gpu.maxSegments * STATE.detail * lineBudget * (0.28 + fade3D * 0.82) * (active2D ? 0.84 : 1))));
     let seg = 0;
     if (S.visualEffectPost !== false && fade3D > 0.001) {
         if (previousStyle && previousStyle !== chosen && styleBlend < 0.995) {
@@ -2132,7 +2367,8 @@ function drawGpuFrame() {
     STATE.surfaceGate = lerp(STATE.surfaceGate || 0, surfaceTarget, surfaceTarget > (STATE.surfaceGate || 0) ? 0.12 : 0.16);
     const surfaceAccent = STATE.surfaceGate;
     if (active3D && fade3D > 0.001 && surfaceAccent > 0.075) {
-        const maxTri = Math.max(64, Math.min(gpu.maxTriangles || 0, Math.floor((gpu.maxTriangles || 0) * STATE.detail * (1 - pressure * 0.40) * (0.34 + surfaceAccent * 0.42) * (active2D ? 0.78 : 1.0))));
+        const surfaceBudget = (1 - pressure * 0.32) * (1 - screenPressure * 0.30) * (1 - screenLevel * 0.030);
+        const maxTri = Math.max(64, Math.min(gpu.maxTriangles || 0, Math.floor((gpu.maxTriangles || 0) * STATE.detail * surfaceBudget * (0.34 + surfaceAccent * 0.42) * (active2D ? 0.78 : 1.0))));
         surfaceTri = drawGpuAudioSurface(gpu, chosen, radius3D * (0.68 + amount * 0.028), hue + 0.10, sat, light * 0.96, amount * (0.52 + surfaceAccent * 0.30), t, STATE.bands, feat, drive, maxTri);
     }
 

@@ -35,7 +35,7 @@ window.S = {
     showParticles: true,
     showRibbons: true,
     tessRibbons: false,
-    shape: "circle",
+    shape: "circle", // circle | square | diamond | point
     colorMode: 2,
     hue: 0.59,
     sat: 0.99,
@@ -57,6 +57,10 @@ window.S = {
     visualEffect2DBackdrop: true,          // camera-locked old-school / iTunes-style WebGPU line backdrop, default on
     visualEffect2DBackdropStyle: 'classic', // registered in render/audio-fx-registry.js and drawn in visual-effects.worker.js
     visualEffect2DBackdropMix: 1.0,
+    visualEffect2DBackdropMotion: 0.0,     // 0..1 camera-locked backdrop drift/shake amount
+    backdropAnimationMode: 'auto',         // auto | smooth | held12
+    backdropAnimationThrottle: false,      // legacy mirror; mode is authoritative
+    backdropAnimationFps: 12,              // legacy mirror / held backdrop FPS
     visualEffect2DResolutionScale: 0.66,   // 0.25..1 geometry budget for the animated 2D backdrop
     visualEffect2DFade: 0.01,             // opacity multiplier for audio 2D backdrop FX
     visualEffect3DFade: 0.5,              // opacity multiplier for audio 3D FX / surfaces
@@ -73,6 +77,7 @@ window.S = {
     // smaller active subset and run cheaper backdrop passes without changing
     // the saved coordinate.
     zoomRenderOptimize: true,
+    adaptiveCulling: true,              // simple master for adaptive count/overdraw/trail safety trims
     zoomNearDistance: 18,
     zoomFarDistance: 75,
     zoomActiveScaleMin: 0.33,
@@ -84,14 +89,18 @@ window.S = {
     zoomOverdrawPixelRatioScaleMin: 0.76,
     zoomOverdrawEffectScaleMin: 0.55,
     zoomOverdrawLineScaleMin: 0.14,
+    overdrawParticleScaleMin: 0.48,
+    overdrawOpacityScaleMin: 0.62,
+    zoomTrailBudgetOptimize: true,
+    zoomTrailMidBandStrength: 0.82,
+    trailAnimationMode: 'auto',            // auto | smooth | held12 | held4
+    trailAnimationThrottle: false,         // legacy mirror; mode is authoritative
+    trailAnimationFps: 12,                 // legacy mirror / held trail FPS
+    zoomDisplayParticleChunk: 4096,
+    zoomTrailParticleChunk: 2048,
     particleCloseScale: true,
     particleCloseScaleStrength: 0.72,
     particleCloseScaleNear: 20,
-
-    // The compat Points renderer is the visible path while the native/TSL
-    // draw path is being hardened. Keep the hidden storage-buffer sim from
-    // burning full compute every frame unless explicitly requested.
-    compatSkipGpuCompute: false,
 
     // ─── Navigation ────────────────────────────────────────────────────────
     moveMode: "orbit",
@@ -106,6 +115,7 @@ window.S = {
     theme: 'synthesist',     // 'classic' | 'synthesist'  (default: synthesist for the new build identity)
     uiScanlines: 0.06,       // 0..0.5 opacity of CRT scanlines over panels
     screenScanlines: 0.06,   // 0..0.5 opacity of CRT scanlines over the simulation canvas
+    showFpsCounter: false,   // optional small FPS / entropy HUD in the System menu
     buttonShape: 'hex',      // 'hex' | 'circle'  (radial menu button shape)
     referenceGrid: 0,        // 0..0.25 opacity of background sky grid
     // Screenshot save triggers, split per gesture so users can opt into one
@@ -205,17 +215,17 @@ window.S = {
     perfParticleScaling: true,
     perfParticleScaleMin: 0.45,
     perfParticleCountChunk: 2048,
+    perfParticleDrawMode: 'native', // native | points; points is explicit, never FPS-triggered
     // Native/WebGPU allocation cap. This is buffer capacity, not the live particle count.
     // Keep this close to the intended freeEnergy so random/preset changes do not churn massive GPU buffers.
     gpuParticleCapacity: 150000,
     gpuResetParticles: false,      // Three/TSL reset stays worker-backed during normal rerolls; post-init seed may use compute
-    compatParticleFallback: false, // opt-in emergency Points draw fallback; baseline uses the original TSL particle material
+    compatParticleFallback: false, // emergency CPU Points fallback only; normal point mode uses the live GPU particle buffers
     compatParticleSize: 0.60,
     compatParticleOpacity: 0.20,
     compatParticleSyncEveryFrames: 2,
     compatParticleCpuMotion: true,
     compatParticleColorPulse: true,
-    compatSpriteMap: false,          // WebGPU PointsMaterial sprite maps can trip uv AttributeNode; keep off by default
     compatMixedVisualModes: false,
     compatMixedVisualModesMusicOnly: true,
     compatParticleMaxCpuActive: 65000,
@@ -238,7 +248,7 @@ window.S = {
     compatStructureEvery: 8,
     compatStructureOpacity: 0.045,
     compatStructureDepth: 5,
-    preferWorkerRenderer: false,   // experimental OffscreenCanvas renderer path, see docs/NATIVE_PORT_NOTES.md
+    preferWorkerRenderer: true,    // OffscreenCanvas renderer path; add ?mainRender=1 to force legacy main-thread rendering
     workerCompute: true,           // when worker renderer is enabled, run native compute in that worker
     nativeComputeBackend: 'three-tsl', // 'three-tsl' now, 'direct-webgpu'/'babylon' for port scaffolds
     nativeTrails: false,           // worker/native path: compute-written trail history buffer
