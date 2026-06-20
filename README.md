@@ -23,7 +23,7 @@ Music Demos (youtube compression bad):
 
 [https://www.youtube.com/watch?v=u9d6SfQyXR0](https://www.youtube.com/watch?v=u9d6SfQyXR0)
 
-<img width="1404" height="256" alt="image" src="https://github.com/user-attachments/assets/abaab159-0562-4c1f-adc6-9bbc90de09ef" />
+<img width="2155" height="1395" alt="image" src="https://github.com/user-attachments/assets/88a72c28-266e-43e1-b460-7d33baa6d8ff" />
 
 ## Build & Run
 
