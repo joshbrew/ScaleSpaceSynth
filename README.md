@@ -9,7 +9,7 @@ Part of the [Scale Space](https://reddit.com/r/ScaleSpace) project.
 
 ### THIS FORK
 
-This is a music visualizing heavily optimized fork to push the framerates, improve memory/threading usage, and enables additional audiovisual fx and control with all that free CPU time. 
+This is a music visualizing heavily optimized fork to push the framerates, improve memory/threading usage, and enable additional audiovisual fx and control with all that free CPU time. 
 
 Just click the Audio Menu, load a song, enable continuous randomization, and chill. 
 
