@@ -9,7 +9,13 @@ Part of the [Scale Space](https://reddit.com/r/ScaleSpace) project.
 
 ### THIS FORK
 
-This is a heavily optimized fork to push the framerates, improve memory/threading usage, and enables additional audiovisual fx and control with all that free CPU time. Just load a song, enable continuous randomization, and chill.
+This is a music visualizing heavily optimized fork to push the framerates, improve memory/threading usage, and enables additional audiovisual fx and control with all that free CPU time. 
+
+Just click the Audio Menu, load a song, enable continuous randomization, and chill. 
+
+I get easily 100-300FPS based on worker turnaround, when up close it chugs but rarely dips below 30-60FPS on a decent machine with hundreds of thousands of particles. There are several configurable performance modes for resolution and adaptive culling. 
+
+There is plenty of room for more VFX and a semi pluggable system you can add more effects into via a registry. We provided a few dozen effects for a trippy retro look. It could be expanded greatly now.
 
 ## [Try this version (click me)](https://scalespacemusic.netlify.app/)
 
