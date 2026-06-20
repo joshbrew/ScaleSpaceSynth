@@ -23,11 +23,7 @@ Music Demos (youtube compression bad):
 
 [https://www.youtube.com/watch?v=u9d6SfQyXR0](https://www.youtube.com/watch?v=u9d6SfQyXR0)
 
-
-<img src="img/Scale-Space-Synthesist-v1.0-Screenshot.png" alt="Scale Space Synthesis" width="1024px" align="center" />
-
-*Scroll further down for more photos.*
-
+<img width="1404" height="256" alt="image" src="https://github.com/user-attachments/assets/abaab159-0562-4c1f-adc6-9bbc90de09ef" />
 
 ## Build & Run
 
@@ -55,6 +51,11 @@ headers:
 
 
 Native apps require a slightly different workflow
+
+
+<img src="img/Scale-Space-Synthesist-v1.0-Screenshot.png" alt="Scale Space Synthesis" width="1024px" align="center" />
+
+*Scroll further down for more photos.*
 
 
 ## Keyboard shortcuts
